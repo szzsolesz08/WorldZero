@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { WorldRenderer } from '../render/renderer';
 import { useUI, ToolId } from '../client/store';
-import { getClient } from './client';
+import { getClient, selectCreature, selectSettlement } from './client';
 import type { GodCommand } from '../engine/types';
 
 let rendererRef: WorldRenderer | null = null;
@@ -51,6 +51,8 @@ export function WorldView() {
   const overlays = useUI((s) => s.overlays);
   const selected = useUI((s) => s.selectedCreature);
   const follow = useUI((s) => s.follow);
+  const lens = useUI((s) => s.lens);
+  const selectedSettlement = useUI((s) => s.selectedSettlement);
 
   useEffect(() => {
     const canvas = canvasRef.current!;
@@ -81,6 +83,13 @@ export function WorldView() {
     r.selectedId = selected;
     r.followSelected = follow;
   }, [selected, follow]);
+
+  useEffect(() => {
+    const r = rendererRef;
+    if (!r) return;
+    r.lens = lens;
+    r.selectedSettlementId = selectedSettlement;
+  }, [lens, selectedSettlement]);
 
   useEffect(() => {
     const r = rendererRef;
@@ -117,7 +126,9 @@ export function WorldView() {
       }
       last = p;
       r.updateHover(p.x, p.y);
-      canvas.style.cursor = down?.moved ? 'grabbing' : r.hoverId !== null && useUI.getState().tool === 'inspect' ? 'pointer' : useUI.getState().tool === 'inspect' ? 'grab' : 'crosshair';
+      const inspecting = useUI.getState().tool === 'inspect';
+      const over = inspecting && !down && (r.hoverId !== null || r.pick(p.x, p.y).kind !== 'none');
+      canvas.style.cursor = down?.moved ? 'grabbing' : over ? 'pointer' : inspecting ? 'grab' : 'crosshair';
     };
     const onUp = (e: MouseEvent) => {
       const r = rendererRef;
@@ -128,13 +139,16 @@ export function WorldView() {
         if (st.tool === 'inspect') {
           const hit = r.pick(p.x, p.y);
           if (hit.kind === 'creature') {
-            st.set({ selectedCreature: hit.id, creature: null });
-            getClient().select(hit.id);
+            selectCreature(hit.id);
           } else if (hit.kind === 'settlement') {
-            st.set({ selectedTribe: hit.tribeId ?? null, panel: 'civ', panelOpen: true });
+            st.set({ selectedTribe: hit.tribeId ?? null });
+            selectSettlement(hit.id);
+          } else if (hit.kind === 'group' && hit.settlementId !== undefined && hit.settlementId >= 0) {
+            // A travelling group opens the town it left (or is heading to), which lists the journey.
+            selectSettlement(hit.settlementId);
           } else {
-            st.set({ selectedCreature: null, creature: null, follow: false });
-            getClient().select(null);
+            selectCreature(null);
+            selectSettlement(null);
           }
         } else {
           const [wx, wy] = r.camera.screenToWorld(p.x, p.y);

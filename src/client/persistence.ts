@@ -1,6 +1,11 @@
 import type { SimState } from '../engine/simulation';
 import type { ScenarioConfig } from '../engine/scenarios';
-import { SAVE_VERSION } from '../engine/constants';
+import { SAVE_VERSION, MIN_SAVE_VERSION } from '../engine/constants';
+
+/** Saves this build can open: older versions are upgraded by the engine on load, never discarded. */
+export function isReadableVersion(v: unknown): boolean {
+  return typeof v === 'number' && v >= MIN_SAVE_VERSION && v <= SAVE_VERSION;
+}
 
 const DB = 'world-zero';
 const STORE = 'saves';
@@ -65,18 +70,20 @@ export async function writeAutosave(state: SimState, population: number): Promis
   }
 }
 
-/** Returns the autosave if present and compatible; discards corrupt or outdated saves. */
+/**
+ * Returns the autosave if present and readable (older supported versions are upgraded on load).
+ * A save from an unsupported version is kept untouched — it is simply not resumed — so nothing is silently destroyed.
+ */
 export async function readAutosave(): Promise<SaveRecord | null> {
   try {
     const r = await get<SaveRecord>(AUTOSAVE);
-    if (!r || !r.state || r.state.version !== SAVE_VERSION) {
-      if (r) await del(AUTOSAVE);
+    if (!r || !r.state || !isReadableVersion(r.state.version)) {
+      if (r?.state) console.warn(`Autosave has unsupported version ${r.state.version}; starting a new world (the old save is kept).`);
       return null;
     }
     return r;
   } catch (e) {
     console.warn('Autosave unreadable, starting fresh', e);
-    try { await del(AUTOSAVE); } catch { /* ignore */ }
     return null;
   }
 }
@@ -92,7 +99,7 @@ export async function writeSlot(slot: string, state: SimState, population: numbe
 export async function readSlot(slot: string): Promise<SaveRecord | null> {
   try {
     const r = await get<SaveRecord>(`slot:${slot}`);
-    return r && r.state?.version === SAVE_VERSION ? r : null;
+    return r && isReadableVersion(r.state?.version) ? r : null;
   } catch {
     return null;
   }
@@ -152,7 +159,8 @@ export function exportStateFile(state: SimState, filename: string): void {
 export async function importStateFile(file: File): Promise<SimState> {
   const text = await file.text();
   const state = decode(JSON.parse(text)) as SimState;
-  if (!state || state.version !== SAVE_VERSION) throw new Error('This save file is from an incompatible version of WORLD ZERO.');
+  if (!state || typeof state.version !== 'number') throw new Error('This file is not a WORLD ZERO save.');
+  if (!isReadableVersion(state.version)) throw new Error(`This save is version ${state.version}; this build of WORLD ZERO opens versions ${MIN_SAVE_VERSION}–${SAVE_VERSION}.`);
   return state;
 }
 

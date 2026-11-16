@@ -1,5 +1,7 @@
 import type { GenomeTemplate } from './creatures/genome';
 import type { WorldGenParams } from './world/world';
+import type { GodCommand } from './types';
+import type { ObjectiveSpec } from './objectives';
 
 export interface SpeciesTemplate {
   id: string;
@@ -84,6 +86,10 @@ export interface ScenarioConfig {
   perIsland?: boolean;
   custom?: boolean;
   seed?: string;
+  /** Optional objectives; sandbox scenarios have none. */
+  objectives?: ObjectiveSpec[];
+  /** Deterministic scripted events: god commands applied at the start of the given day. */
+  schedule?: { day: number; cmd: GodCommand }[];
 }
 
 const BASE_SETTINGS: ScenarioSettings = { foodMult: 1, rainMult: 1, tempOffset: 0, mutationRate: 0.08, disasterRate: 0.5, disasterRamp: 0 };
@@ -159,6 +165,32 @@ export const SCENARIOS: ScenarioConfig[] = [
       { template: 'pack_hunter', count: 12, herds: 2 },
     ],
     settings: { ...BASE_SETTINGS, foodMult: 1.2, disasterRate: 0.3 },
+    objectives: [
+      { kind: 'civSurvives', label: 'Keep a civilization alive for 25 years', params: { years: 25 } },
+      { kind: 'settlementPopulation', label: 'Grow a settlement to 120 inhabitants', params: { count: 120 } },
+      { kind: 'connectedSettlements', label: 'Establish three connected settlements', params: { count: 3, range: 35 } },
+      { kind: 'resettleRuin', label: 'Resettle an abandoned settlement' },
+      { kind: 'recoverCapital', label: 'Recover a civilization after it loses its capital' },
+      { kind: 'peaceBetweenRivals', label: 'Bring two rival civilizations to a lasting peace', params: { days: 30 } },
+    ],
+  },
+  {
+    id: 'drought', name: 'The Great Drought', tagline: 'When the rains fail',
+    description: 'Young civilizations have just settled a fertile world when a long drought sets in. Watch famine push people to migrate, abandon towns and fight over water.',
+    world: { moistureBias: -0.04 },
+    species: [
+      { template: 'sapient', count: 110, herds: 6, genes: { intelligence: 0.76 } },
+      { template: 'grazer', count: 140, herds: 6 }, { template: 'hopper', count: 90, herds: 5 }, { template: 'desert', count: 40, herds: 3 },
+      { template: 'pack_hunter', count: 14, herds: 2 },
+    ],
+    settings: { ...BASE_SETTINGS, foodMult: 1.1, disasterRate: 0.2 },
+    // A year is 20 days: the rains fail at the end of the first summer and stay away for three seasons.
+    schedule: [{ day: 9, cmd: { type: 'drought', days: 15 } }],
+    objectives: [
+      { kind: 'surviveDrought', label: 'Keep at least half of all life alive through the drought', params: { minFraction: 0.5 } },
+      { kind: 'civSurvives', label: 'Keep a civilization alive for 10 years', params: { years: 10 } },
+      { kind: 'resettleRuin', label: 'Resettle an abandoned town' },
+    ],
   },
   {
     id: 'apocalypse', name: 'Apocalypse', tagline: 'Everything goes wrong',
@@ -170,6 +202,7 @@ export const SCENARIOS: ScenarioConfig[] = [
     ],
     settings: { ...BASE_SETTINGS, disasterRate: 2, disasterRamp: 1.5 },
     climate: { tempTrend: 2.5, trendLimit: 12, storminess: 1.8 },
+    objectives: [{ kind: 'speciesSurvives', label: 'Keep the rarest species alive for 5 years', params: { years: 5 } }],
   },
 ];
 

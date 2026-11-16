@@ -6,7 +6,7 @@ import { randomSeedString } from '../engine/rng';
 import { getClient } from './client';
 import { loadCustomScenarios, saveCustomScenario, deleteCustomScenario, clearAutosave } from '../client/persistence';
 import { EventIcon } from './EventIcon';
-import { selectEvent } from './Dashboard';
+import { selectEvent } from './EventRow';
 import { fmtDate } from './charts/common';
 import { TICKS_PER_DAY } from '../engine/constants';
 import { Rng } from '../engine/rng';
@@ -196,10 +196,12 @@ export function AwayDialog() {
         {away.events.length === 0 ? <div className="empty">A quiet time: nothing of note happened.</div> : (
           <div className="away-list">
             {away.events.slice(-40).reverse().map((e) => (
-              <button key={e.id} className={`ev lvl-${e.level}`} onClick={() => { set({ away: null }); selectEvent(e); }}>
-                <EventIcon cat={e.cat} />
-                <span><b>{e.title}</b><small>{fmtDate(e.tick)}</small><p>{e.text}</p></span>
-              </button>
+              <div key={e.id} className={`ev lvl-${e.level}`}>
+                <button className="ev-main" onClick={() => { set({ away: null }); selectEvent(e); }}>
+                  <EventIcon cat={e.cat} />
+                  <span><b>{e.title}</b><small>{fmtDate(e.tick)}</small><p>{e.text}</p></span>
+                </button>
+              </div>
             ))}
           </div>
         )}

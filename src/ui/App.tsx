@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { X } from 'lucide-react';
 import { useUI, SPEEDS } from '../client/store';
-import { getClient, applySpeed, autosaveNow } from './client';
+import { getClient, applySpeed, autosaveNow, selectCreature, selectSettlement } from './client';
 import { readAutosave } from '../client/persistence';
 import { getScenario } from '../engine/scenarios';
 import { randomSeedString } from '../engine/rng';
@@ -10,6 +10,7 @@ import { TopBar } from './TopBar';
 import { GodRail } from './GodRail';
 import { Dashboard } from './Dashboard';
 import { Inspector } from './Inspector';
+import { SettlementInspector } from './SettlementInspector';
 import { Minimap, EventTicker } from './BottomLeft';
 import { NewWorldDialog, AwayDialog } from './Dialogs';
 
@@ -75,7 +76,7 @@ function ErrorBanner() {
 }
 
 export function App() {
-  const inspecting = useUI((s) => s.selectedCreature !== null);
+  const inspecting = useUI((s) => s.selectedCreature !== null || s.selectedSettlement !== null);
   useEffect(() => {
     void boot();
     const auto = window.setInterval(() => void autosaveNow(), 45000);
@@ -103,7 +104,8 @@ export function App() {
         case '1': case '2': case '3': case '4': st.set({ speed: SPEEDS[Number(e.key) - 1], paused: false }); applySpeed(); break;
         case 'Escape':
           if (st.tool !== 'inspect') st.set({ tool: 'inspect' });
-          else { st.set({ selectedCreature: null, creature: null, follow: false }); getClient().select(null); }
+          else if (st.selectedSettlement !== null) selectSettlement(null);
+          else selectCreature(null);
           break;
         case 'f': case 'F': if (st.selectedCreature !== null) st.set({ follow: !st.follow }); break;
         case 'Tab': e.preventDefault(); st.set({ panelOpen: !st.panelOpen }); break;
@@ -127,6 +129,7 @@ export function App() {
       <TopBar />
       <GodRail />
       <Inspector />
+      <SettlementInspector />
       <Dashboard />
       <Minimap />
       <EventTicker />

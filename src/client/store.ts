@@ -1,7 +1,8 @@
 import { create } from 'zustand';
 import type {
-  CreatureDetail, EnvironmentView, HistorySeries, SimEvent, SpeciesView, StatsSummary, TribeView,
+  CreatureDetail, EnvironmentView, HistorySeries, ObjectiveView, SettlementDetail, SimEvent, SpeciesView, StatsSummary, TribeView,
 } from '../engine/types';
+import type { CivCounters } from '../engine/civ/civilization';
 import type { ScenarioConfig } from '../engine/scenarios';
 
 export type ToolId =
@@ -11,6 +12,9 @@ export type ToolId =
 export type PanelId = 'overview' | 'evolution' | 'civ' | 'environment' | 'chronicle';
 
 export const SPEEDS = [1, 2, 10, 100] as const;
+
+/** Map lenses: one analytical colouring of settlements at a time. */
+export type Lens = 'none' | 'condition' | 'prosperity' | 'food' | 'density';
 
 export interface AwaySummary {
   ticks: number;
@@ -45,9 +49,16 @@ interface UIState {
   creature: CreatureDetail | null;
   follow: boolean;
   selectedTribe: number | null;
+  selectedSettlement: number | null;
+  settlement: SettlementDetail | null;
+  objectives: ObjectiveView[];
+  counters: CivCounters | null;
   panel: PanelId;
   panelOpen: boolean;
-  overlays: { territory: boolean; vegetation: boolean; weather: boolean; labels: boolean };
+  overlays: { territory: boolean; vegetation: boolean; weather: boolean; labels: boolean; migration: boolean };
+  lens: Lens;
+  /** Event to scroll to and highlight in the Chronicle (set by "because of" links). */
+  focusEvent: number | null;
   away: AwaySummary | null;
   scenarioDialog: boolean;
   lastSavedAt: number | null;
@@ -85,9 +96,15 @@ export const useUI = create<UIState>((set, get) => ({
   creature: null,
   follow: false,
   selectedTribe: null,
+  selectedSettlement: null,
+  settlement: null,
+  objectives: [],
+  counters: null,
   panel: 'overview',
   panelOpen: true,
-  overlays: { territory: true, vegetation: true, weather: true, labels: true },
+  overlays: { territory: true, vegetation: true, weather: true, labels: true, migration: true },
+  lens: 'none',
+  focusEvent: null,
   away: null,
   scenarioDialog: false,
   lastSavedAt: null,

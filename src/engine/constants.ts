@@ -1,6 +1,8 @@
 /** Central tuning knobs. Balance the ecosystem here. */
 
-export const SAVE_VERSION = 3;
+export const SAVE_VERSION = 4;
+/** Oldest save version that can still be upgraded and loaded. */
+export const MIN_SAVE_VERSION = 3;
 
 // ---- Time ----
 export const TICKS_PER_DAY = 240;

@@ -14,11 +14,13 @@ import { SpatialHash } from './spatial';
 import { EventLog } from './events';
 import { StatsTracker } from './stats';
 import { applyCommand, rollNaturalDisasters } from './disasters';
+import { evaluateObjectives, initObjectives, ObjectiveState } from './objectives';
+import { upgradeState } from './saveUpgrade';
 import { ScenarioConfig, TEMPLATES } from './scenarios';
 import {
   ARCHIVE_MAX, BIRTH_COST_FATHER, BIRTH_COST_MOTHER, CARCASS_DECAY, CARCASS_MEAT_PER_SIZE, CIV_INTERVAL,
   MATE_MAX_DISTANCE, MAX_POPULATION, SAVE_VERSION, SPATIAL_CELL, SPECIATION_INTERVAL, STATS_INTERVAL,
-  TICKS_PER_DAY, TICKS_PER_YEAR, VEG_INTERVAL, DAYS_PER_SEASON,
+  TICKS_PER_DAY, TICKS_PER_YEAR, TICKS_PER_SEASON, VEG_INTERVAL, DAYS_PER_SEASON,
 } from './constants';
 import type {
   ArchivedCreature, CreatureDetail, EnvironmentView, FamilyNode, GodCommand, SimSettings, StatsSummary,
@@ -74,6 +76,14 @@ export class Simulation {
   lastClimateEventOffset = 0;
   epidemicReported = 0;
   extinctionReported = false;
+  /** Causal bookkeeping: the events behind ongoing conditions. */
+  droughtEventId = -1;
+  droughtEndTick = -1e9;
+  plagueEventId = -1;
+  wasDrought = false;
+  /** Chronicle throttle for notable individuals: "kind:speciesId" -> tick of the last announcement. */
+  notableTick: Record<string, number> = {};
+  objectives: ObjectiveState[] = [];
   /** Optional per-phase timing (ms accumulated), enabled by setting to {}. */
   prof: Record<string, number> | null = null;
 
@@ -154,6 +164,7 @@ export class Simulation {
     sim.species.refresh(sim.creatures, 0);
     sim.lastVeg = updateVegetation(world, sim.climate, rng, 0, sim.settings.foodMult);
     sim.stats.sample(sim);
+    sim.objectives = initObjectives(sim, scenario.objectives);
     sim.events.push({
       tick: 0, cat: 'milestone', level: 3, title: 'A world is born',
       text: `${scenario.name}: ${world.landmasses.filter((l) => l.size > 100).length} landmasses rise from the sea. ${sim.creatures.length} creatures of ${sim.species.list.length} species awaken.`,
@@ -232,6 +243,11 @@ export class Simulation {
     const n = Math.min(mother.litter, Math.floor(spare / costPer));
     if (n <= 0) return false;
     const rng = this.rng;
+    // Crowded households have fewer children: housing feeds back on births.
+    if (mother.homeId >= 0) {
+      const hs = this.civ.settlement(mother.homeId);
+      if (hs && hs.econ.crowding > 1.25 && rng.chance(0.5)) { mother.cooldown = Math.round(mother.reproCooldown * 0.3); return false; }
+    }
     const kids: Creature[] = [];
     for (let k = 0; k < n; k++) {
       const g = new Float32Array(GENE_COUNT);
@@ -251,6 +267,13 @@ export class Simulation {
       if (tribe >= 0) {
         child.tribeId = tribe;
         child.homeId = mother.tribeId === tribe ? mother.homeId : father.homeId;
+      }
+      // Born on the road: the child travels with its mother's group.
+      const grp = mother.migrationId >= 0 ? this.civ.group(mother.migrationId) : undefined;
+      if (grp && child.tribeId === grp.tribeId) {
+        child.migrationId = grp.id;
+        child.homeId = -1;
+        grp.members.push(child.id);
       }
       kids.push(child);
       this.birthsPeriod++;
@@ -310,6 +333,7 @@ export class Simulation {
       o.remember(this.tick, 'loss', `Lost ${label} ${c.name} (${cause})`);
       if (o.mateId === c.id) o.mateId = -1;
     }
+    if (c.tribeId >= 0 || c.migrationId >= 0) this.civ.onDeath(c, !!killer);
     this.archiveCreature(c, cause);
     this.byId.delete(c.id);
   }
@@ -439,6 +463,7 @@ export class Simulation {
       });
     }
     this.stats.sample(this);
+    if (this.objectives.length) evaluateObjectives(this);
     const n = this.creatures.length;
     // Population crash / boom detection per species.
     const hist = this.stats.speciesHistory;
@@ -455,23 +480,29 @@ export class Simulation {
         this.events.push({ tick: this.tick, cat: 'species', level: 1, title: 'Population boom', text: `${s.common}s are thriving: ${prev} → ${s.population}.`, speciesId: s.id });
       }
     }
-    // Notable individuals.
+    // Notable individuals keep their titles; the chronicle announces each kind at most once per species per season.
+    const announce = (kind: string, c: Creature): boolean => {
+      const k = `${kind}:${c.speciesId}`;
+      if (this.tick - (this.notableTick[k] ?? -1e9) < TICKS_PER_SEASON) return false;
+      this.notableTick[k] = this.tick;
+      return true;
+    };
     for (const c of this.creatures) {
       if (c.kills >= 8 && !(c.flags & 2)) {
         c.flags |= 2;
         c.title = 'Apex Predator';
-        this.events.push({ tick: this.tick, cat: 'creature', level: 2, title: 'A major predator has appeared', text: `${c.name} the ${speciesLabel(this, c.speciesId)} has claimed ${c.kills} lives and rules the land around it.`, x: c.x, y: c.y, creatureId: c.id, speciesId: c.speciesId });
+        if (announce('predator', c)) this.events.push({ tick: this.tick, cat: 'creature', level: 2, title: 'A major predator has appeared', text: `${c.name} the ${speciesLabel(this, c.speciesId)} has claimed ${c.kills} lives and rules the land around it.`, x: c.x, y: c.y, creatureId: c.id, speciesId: c.speciesId });
       }
       if (c.maxTravel > this.world.width * 0.4 && !(c.flags & 1)) {
         c.flags |= 1;
         if (!c.title) c.title = 'Wanderer';
         c.remember(this.tick, 'journey', `Completed an extraordinary journey of ${Math.round(c.maxTravel)} leagues`);
-        this.events.push({ tick: this.tick, cat: 'creature', level: 2, title: 'An extraordinary journey', text: `${c.name} the ${speciesLabel(this, c.speciesId)} has wandered ${Math.round(c.maxTravel)} leagues from its birthplace.`, x: c.x, y: c.y, creatureId: c.id, speciesId: c.speciesId });
+        if (announce('journey', c)) this.events.push({ tick: this.tick, cat: 'creature', level: 2, title: 'An extraordinary journey', text: `${c.name} the ${speciesLabel(this, c.speciesId)} has wandered ${Math.round(c.maxTravel)} leagues from its birthplace.`, x: c.x, y: c.y, creatureId: c.id, speciesId: c.speciesId });
       }
       if (c.children.length >= 14 && !(c.flags & 4)) {
         c.flags |= 4;
         if (!c.title) c.title = c.sex === 0 ? 'Matriarch' : 'Patriarch';
-        this.events.push({ tick: this.tick, cat: 'creature', level: 1, title: c.sex === 0 ? 'A great matriarch' : 'A great patriarch', text: `${c.name} the ${speciesLabel(this, c.speciesId)} has raised ${c.children.length} offspring.`, x: c.x, y: c.y, creatureId: c.id, speciesId: c.speciesId });
+        if (announce('parent', c)) this.events.push({ tick: this.tick, cat: 'creature', level: 1, title: c.sex === 0 ? 'A great matriarch' : 'A great patriarch', text: `${c.name} the ${speciesLabel(this, c.speciesId)} has raised ${c.children.length} offspring.`, x: c.x, y: c.y, creatureId: c.id, speciesId: c.speciesId });
       }
     }
     // Milestones.
@@ -502,7 +533,11 @@ export class Simulation {
     const tick = this.tick;
     const day = Math.floor(tick / TICKS_PER_DAY);
     if (this.settings.disasterRamp > 0) this.settings.disasterRate += this.settings.disasterRamp / (DAYS_PER_SEASON * 4);
+    for (const item of this.scenario.schedule ?? []) if (item.day === day) applyCommand(this, item.cmd);
     rollNaturalDisasters(this);
+    const drought = this.climate.droughtTicks > 0;
+    if (this.wasDrought && !drought) this.droughtEndTick = tick;
+    this.wasDrought = drought;
     // Climate shifts move biome boundaries (glaciers advance/retreat).
     const off = this.climate.globalOffset();
     if (Math.abs(off - this.climate.lastClassifiedOffset) >= 1.5) {
@@ -754,6 +789,8 @@ export class Simulation {
       landmasses: w.landmasses.map((l) => ({ ...l })),
     };
     for (const k of WORLD_ARRAYS) worldData[k] = (w[k] as ArrayLike<number> & { slice(): unknown }).slice();
+    // The per-chunk food cache refreshes every few ticks; saving it keeps a resumed world identical between refreshes.
+    worldData.chunkFood = w.chunkFood.slice();
     return {
       version: SAVE_VERSION,
       seed: this.seed,
@@ -777,13 +814,16 @@ export class Simulation {
         maxGeneration: this.maxGeneration, popRecord: this.popRecord, generationMilestone: this.generationMilestone,
         lastClimateEventOffset: this.lastClimateEventOffset, epidemicReported: this.epidemicReported,
         birthsPeriod: this.birthsPeriod, deathsPeriod: this.deathsPeriod, deathAgePeriod: this.deathAgePeriod, mutationsPeriod: this.mutationsPeriod,
+        droughtEventId: this.droughtEventId, droughtEndTick: this.droughtEndTick, plagueEventId: this.plagueEventId, wasDrought: this.wasDrought,
+        notableTick: { ...this.notableTick },
       },
       lastVeg: { ...this.lastVeg },
+      objectives: this.objectives.map((o) => JSON.parse(JSON.stringify(o))),
     };
   }
 
-  static deserialize(s: SimState): Simulation {
-    if (!s || s.version !== SAVE_VERSION) throw new Error(`Incompatible save (version ${s?.version}, expected ${SAVE_VERSION})`);
+  static deserialize(input: SimState): Simulation {
+    const s = upgradeState(input);
     const wd = s.world as Record<string, any>;
     const world = new World(wd.width, wd.height);
     world.seaLevel = wd.seaLevel;
@@ -794,7 +834,8 @@ export class Simulation {
       const dst = world[k] as unknown as { set(a: ArrayLike<number>): void };
       dst.set(src);
     }
-    world.updateChunkFood();
+    if (wd.chunkFood && wd.chunkFood.length === world.chunkFood.length) world.chunkFood.set(wd.chunkFood);
+    else world.updateChunkFood();
     const rng = new Rng(0);
     rng.setState(s.rng);
     const sim = new Simulation(s.seed, rng, world, s.scenario);
@@ -812,6 +853,7 @@ export class Simulation {
     sim.nextId = s.nextId;
     Object.assign(sim, s.counters);
     sim.lastVeg = s.lastVeg;
+    sim.objectives = s.objectives ?? [];
     for (const d of s.creatures) {
       const c = deserializeCreature(d);
       sim.creatures.push(c);
@@ -841,6 +883,7 @@ export interface SimState {
   nextCarcassId: number;
   counters: Record<string, unknown>;
   lastVeg: VegetationResult;
+  objectives?: ObjectiveState[];
 }
 
 function serializeCreature(c: Creature): Record<string, unknown> {

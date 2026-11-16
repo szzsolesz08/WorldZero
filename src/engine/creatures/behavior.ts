@@ -8,6 +8,7 @@ import {
 } from '../constants';
 import type { Action } from '../types';
 import { dist2d } from '../mathutil';
+import { eatFromSupplies, migrantTarget } from '../civ/migration';
 
 const nb: Creature[] = [];
 const MOVE_OFFSETS = [0, 0.7, -0.7, 1.4, -1.4, 2.2, -2.2];
@@ -120,6 +121,8 @@ export function decide(sim: Simulation, c: Creature): void {
   const perc = c.perception * percMult;
   const n = sim.spatial.query(c.x, c.y, Math.min(perc, 9.5), nb, 32, c);
 
+  const group = c.migrationId >= 0 ? sim.civ.group(c.migrationId) : undefined;
+  if (group && c.energy < c.maxEnergy * 0.6) eatFromSupplies(c, group);
   const hunger = 1 - c.energy / c.maxEnergy;
   const thirst = 1 - c.hydration;
   const meatPref = c.meatEff > c.herbEff * 0.75;
@@ -191,7 +194,9 @@ export function decide(sim: Simulation, c: Creature): void {
   if (restTime) { const v = 1.6; if (v > bs) { bs = v; best = 'rest'; } }
   if (c.stress > 6 || c.storm > 0.5) { const v = 1.2 + c.stress * 0.1 + c.storm; if (v > bs) { bs = v; best = 'rest'; } }
   { const v = c.sociability * (same < 3 ? 1.1 : 0.2); if (v > bs) { bs = v; best = 'socialize'; } }
-  if (c.tribeId >= 0 && !restTime && c.mature) { const v = 1.1; if (v > bs) { bs = v; best = 'work'; } }
+  if (c.tribeId >= 0 && !restTime && c.mature && !group) { const v = 1.1; if (v > bs) { bs = v; best = 'work'; } }
+  // Travellers keep walking (eating what they find on the way) unless hunger or thirst become serious.
+  if (group && !restTime) { const v = 3.1; if (v > bs) { bs = v; best = 'migrate'; } }
 
   if (best !== c.action) c.actionTicks = 0;
   c.sprint = false;
@@ -268,6 +273,14 @@ export function decide(sim: Simulation, c: Creature): void {
     case 'work':
       if (!sim.civ.planWork(sim, c)) planExplore(sim, c, 'Wandering near the settlement');
       break;
+    case 'migrate': {
+      c.action = 'migrate';
+      c.targetId = -1;
+      const dest = group!.destId >= 0 ? sim.civ.settlementById.get(group!.destId)?.name : undefined;
+      c.goal = group!.kind === 'refugee' ? `Fleeing as a refugee to ${dest ?? 'safety'}`
+        : group!.kind === 'colonist' ? `Travelling to found a new settlement` : `Migrating to ${dest ?? 'a new home'}`;
+      break;
+    }
     default:
       if (c.action === 'explore' && c.actionTicks < 200 && Math.abs(c.tx - c.x) + Math.abs(c.ty - c.y) > 1) break;
       planExplore(sim, c, null);
@@ -285,8 +298,7 @@ function planEat(sim: Simulation, c: Creature, prey: Creature | null, hunger: nu
   // Tribe granary.
   if (c.tribeId >= 0 && c.homeId >= 0) {
     const s = sim.civ.settlement(c.homeId);
-    const tr = sim.civ.tribe(c.tribeId);
-    if (s && tr && tr.stock.food > 2) {
+    if (s && s.stock.food > 2) {
       const d = dist2d(s.x - c.x, s.y - c.y);
       if (d < 30 && (hunger > 0.3 || d < 8)) {
         c.action = 'eat_store';
@@ -706,6 +718,15 @@ export function act(sim: Simulation, c: Creature): void {
     case 'work':
       sim.civ.actWork(sim, c);
       return;
+    case 'migrate': {
+      const g = c.migrationId >= 0 ? sim.civ.group(c.migrationId) : undefined;
+      if (!g) { c.decideIn = 0; return; }
+      const p = migrantTarget(sim, g, c);
+      moveToward(sim, c, p.x, p.y);
+      if (c.herbEff > 0.3 && c.energy < c.maxEnergy * 0.85 && (sim.tick + c.id) % 2 === 0) eatPlants(sim, c);
+      if (c.hydration < 0.7 && sim.world.waterDist[sim.world.tileAt(c.x, c.y)] <= 1) c.hydration = Math.min(1, c.hydration + 0.02);
+      return;
+    }
     default: {
       if (moveToward(sim, c, c.tx, c.ty, c.action === 'explore' ? 0.85 : 0.6) < 0.6) c.decideIn = 0;
       // Opportunistic snacking while travelling.

@@ -5,6 +5,7 @@ import { ignite } from './world/vegetation';
 import { TEMPLATES } from './scenarios';
 import { genomeFromTemplate, randomGenome, G, Genome, GENE_COUNT, clamp01 } from './creatures/genome';
 import { createNoise2D } from './noise';
+import { requestPolicy } from './civ/strategy';
 
 function forCreaturesIn(sim: Simulation, x: number, y: number, r: number, fn: (c: import('./creatures/creature').Creature, d: number) => void): number {
   let n = 0;
@@ -106,7 +107,8 @@ export function applyCommand(sim: Simulation, cmd: GodCommand): void {
     case 'drought': {
       sim.climate.droughtTicks = Math.round(cmd.days * TICKS_PER_DAY);
       sim.climate.droughtSeverity = 0.8;
-      sim.events.push({ tick, cat: 'climate', level: 2, title: 'Drought', text: `A great drought grips the world. Rains will fail for ${cmd.days} days.` });
+      const ev = sim.events.push({ tick, cat: 'climate', level: cmd.days >= 20 ? 3 : 2, title: 'Drought', text: `A great drought grips the world. Rains will fail for ${cmd.days} days.` });
+      sim.droughtEventId = ev.id;
       return;
     }
     case 'globalStorm': {
@@ -133,13 +135,16 @@ export function applyCommand(sim: Simulation, cmd: GodCommand): void {
         if (c.health <= 0) sim.kill(c, c.lastDamage);
         else if (rng.chance(0.3)) c.remember(tick, 'disaster', 'Survived a terrible earthquake');
       });
-      const ruined = sim.civ.damageArea(sim, cmd.x, cmd.y, R, 30 * mag / 6, 'an earthquake');
+      const qev = sim.events.push({ tick, cat: 'disaster', level: 3, title: `Earthquake (M${mag.toFixed(1)})`, text: '', x: cmd.x, y: cmd.y });
+      const ruined = sim.civ.damageArea(sim, cmd.x, cmd.y, R, 30 * mag / 6, 'an earthquake', qev.id);
       sim.fx.push({ kind: 'quake', x: cmd.x, y: cmd.y, r: R, tick });
-      sim.events.push({ tick, cat: 'disaster', level: 3, title: `Earthquake (M${mag.toFixed(1)})`, text: `A magnitude ${mag.toFixed(1)} earthquake shook ${landmassNameAt(sim, cmd.x, cmd.y)}${hurt ? `, injuring ${hurt} creatures` : ''}${ruined ? ` and levelling ${ruined} settlement${ruined > 1 ? 's' : ''}` : ''}.`, x: cmd.x, y: cmd.y });
+      qev.text = `A magnitude ${mag.toFixed(1)} earthquake shook ${landmassNameAt(sim, cmd.x, cmd.y)}${hurt ? `, injuring ${hurt} creatures` : ''}${ruined ? ` and levelling ${ruined} settlement${ruined > 1 ? 's' : ''}` : ''}.`;
       return;
     }
     case 'meteor': {
       const R = 4.5;
+      // Name the place before the crater floods it.
+      const where = landmassNameAt(sim, cmd.x, cmd.y);
       deform(sim, cmd.x, cmd.y, R + 2.5, (_dx, _dy, d) => (d < R ? -0.22 * (1 - (d / R) ** 2) : 0.03 * (1 - (d - R) / 2.5)));
       for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) {
         const tx = Math.floor(cmd.x) + dx, ty = Math.floor(cmd.y) + dy;
@@ -158,9 +163,10 @@ export function applyCommand(sim: Simulation, cmd: GodCommand): void {
       });
       ignite(w, cmd.x, cmd.y, 10, rng);
       sim.climate.impactWinter -= 2.5 + rng.next() * 2;
-      const ruined = sim.civ.damageArea(sim, cmd.x, cmd.y, 12, 120, 'a meteor strike');
+      const mev = sim.events.push({ tick, cat: 'disaster', level: 3, title: 'Meteor strike', text: '', x: cmd.x, y: cmd.y });
+      const ruined = sim.civ.damageArea(sim, cmd.x, cmd.y, 12, 120, 'a meteor strike', mev.id);
       sim.fx.push({ kind: 'meteor', x: cmd.x, y: cmd.y, r: 10, tick });
-      sim.events.push({ tick, cat: 'disaster', level: 3, title: 'Meteor strike', text: `A meteor struck ${landmassNameAt(sim, cmd.x, cmd.y)}, killing ${dead} creatures${ruined ? ` and destroying ${ruined} settlement${ruined > 1 ? 's' : ''}` : ''}. Dust darkens the skies.`, x: cmd.x, y: cmd.y });
+      mev.text = `A meteor struck ${where}, killing ${dead} creatures${ruined ? ` and destroying ${ruined} settlement${ruined > 1 ? 's' : ''}` : ''}. Dust darkens the skies.`;
       return;
     }
     case 'volcano': {
@@ -175,9 +181,10 @@ export function applyCommand(sim: Simulation, cmd: GodCommand): void {
       });
       ignite(w, spot.x, spot.y, 9, rng);
       sim.climate.impactWinter -= 2 + rng.next() * 2;
-      const ruined = sim.civ.damageArea(sim, spot.x, spot.y, 10, 90, 'a volcanic eruption');
+      const vev = sim.events.push({ tick, cat: 'disaster', level: 3, title: 'Volcanic eruption', text: '', x: spot.x, y: spot.y });
+      const ruined = sim.civ.damageArea(sim, spot.x, spot.y, 10, 90, 'a volcanic eruption', vev.id);
       sim.fx.push({ kind: 'volcano', x: spot.x, y: spot.y, r: 8, tick });
-      sim.events.push({ tick, cat: 'disaster', level: 3, title: 'Volcanic eruption', text: `A volcano erupted on ${landmassNameAt(sim, spot.x, spot.y)}${dead ? `, killing ${dead}` : ''}${ruined ? ` and burying ${ruined} settlement${ruined > 1 ? 's' : ''}` : ''}. Ash cools the world.`, x: spot.x, y: spot.y });
+      vev.text = `A volcano erupted on ${landmassNameAt(sim, spot.x, spot.y)}${dead ? `, killing ${dead}` : ''}${ruined ? ` and burying ${ruined} settlement${ruined > 1 ? 's' : ''}` : ''}. Ash cools the world.`;
       return;
     }
     case 'wildfire': {
@@ -189,7 +196,8 @@ export function applyCommand(sim: Simulation, cmd: GodCommand): void {
     case 'plague': {
       const n = forCreaturesIn(sim, cmd.x, cmd.y, 7, (c) => { if (c.immuneTicks === 0) c.infection = 700 + rng.int(0, 300); });
       sim.fx.push({ kind: 'plague', x: cmd.x, y: cmd.y, r: 7, tick });
-      sim.events.push({ tick, cat: 'disaster', level: 2, title: 'Plague', text: `A plague has broken out on ${landmassNameAt(sim, cmd.x, cmd.y)}, infecting ${n} creatures.`, x: cmd.x, y: cmd.y });
+      const pev = sim.events.push({ tick, cat: 'disaster', level: 2, title: 'Plague', text: `A plague has broken out on ${landmassNameAt(sim, cmd.x, cmd.y)}, infecting ${n} creatures.`, x: cmd.x, y: cmd.y });
+      sim.plagueEventId = pev.id;
       return;
     }
     case 'terraform': {
@@ -249,6 +257,11 @@ export function applyCommand(sim: Simulation, cmd: GodCommand): void {
       sim.climate.tempTrend = -5;
       sim.climate.trendLimit = sim.climate.drift - 14;
       sim.events.push({ tick, cat: 'climate', level: 3, title: 'An ice age begins', text: 'The sun dims and the world begins to freeze. Glaciers will advance for years to come.' });
+      return;
+    }
+    case 'setPolicy': {
+      const tr = sim.civ.tribe(cmd.tribeId);
+      if (tr && !tr.collapsed) requestPolicy(sim, tr, cmd.key, cmd.value);
       return;
     }
     case 'bless': {

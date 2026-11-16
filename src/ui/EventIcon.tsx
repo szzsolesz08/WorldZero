@@ -1,4 +1,4 @@
-import { Dna, Landmark, Swords, Zap, CloudSun, Footprints, Hourglass, Sparkles } from 'lucide-react';
+import { Dna, Landmark, Swords, Zap, CloudSun, Footprints, Hourglass, Sparkles, MoveRight, Castle } from 'lucide-react';
 import type { EventCategory } from '../engine/types';
 
 const ICONS: Record<EventCategory, typeof Dna> = {
@@ -11,6 +11,8 @@ const ICONS: Record<EventCategory, typeof Dna> = {
   creature: Footprints,
   milestone: Hourglass,
   god: Sparkles,
+  migration: MoveRight,
+  settlement: Castle,
 };
 
 export function EventIcon({ cat }: { cat: EventCategory }) {

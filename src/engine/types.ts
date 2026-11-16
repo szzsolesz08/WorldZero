@@ -2,7 +2,7 @@
 
 export type Action =
   | 'wander' | 'graze' | 'hunt' | 'scavenge' | 'drink' | 'flee' | 'mate' | 'rest' | 'socialize'
-  | 'explore' | 'follow' | 'defend' | 'work' | 'eat_store' | 'return';
+  | 'explore' | 'follow' | 'defend' | 'work' | 'eat_store' | 'return' | 'migrate';
 
 export type Job = 'forage' | 'hunt' | 'woodcut' | 'mine' | 'farm' | 'build' | 'guard' | 'raid' | 'trade' | 'scout';
 
@@ -20,7 +20,9 @@ export interface Relation {
   affinity: number;
 }
 
-export type EventCategory = 'species' | 'evolution' | 'civ' | 'war' | 'disaster' | 'creature' | 'climate' | 'milestone' | 'god';
+export type EventCategory =
+  | 'species' | 'evolution' | 'civ' | 'war' | 'disaster' | 'creature' | 'climate' | 'milestone' | 'god'
+  | 'migration' | 'settlement';
 
 export interface SimEvent {
   id: number;
@@ -36,6 +38,8 @@ export interface SimEvent {
   speciesId?: number;
   tribeId?: number;
   settlementId?: number;
+  /** The event that caused this one, when the simulation knows it. */
+  causeId?: number;
 }
 
 export type SimParamKey = 'tempOffset' | 'rainMult' | 'foodMult' | 'mutationRate' | 'disasterRate';
@@ -60,7 +64,14 @@ export type GodCommand =
   | { type: 'addRandom'; count: number }
   | { type: 'climateShift'; trend: number; limit: number }
   | { type: 'bless'; creatureId: number }
-  | { type: 'iceAge' };
+  | { type: 'iceAge' }
+  | { type: 'setPolicy'; tribeId: number; key: PolicyKey; value: number };
+
+export const POLICY_KEYS = ['expansion', 'agriculture', 'trade', 'research', 'diplomacy', 'military', 'conservation', 'stability'] as const;
+export type PolicyKey = (typeof POLICY_KEYS)[number];
+export type GoalId = 'grow' | 'food_security' | 'expand' | 'research' | 'trade' | 'defend' | 'conquest' | 'alliance' | 'recover' | 'stability';
+export type SettlementState = 'founded' | 'growing' | 'thriving' | 'stable' | 'declining' | 'crisis' | 'abandoned' | 'ruins';
+export type MigrationKind = 'economic' | 'refugee' | 'colonist';
 
 export interface SimSettings {
   foodMult: number;
@@ -119,6 +130,24 @@ export interface TribeView {
   homeX: number;
   homeY: number;
   history: number[];
+  capitalId: number;
+  capitalName: string;
+  stability: number;
+  instability: string;
+  goals: GoalId[];
+  policies: Record<PolicyKey, number>;
+  pendingPolicies: { key: PolicyKey; value: number; effectiveAt: number }[];
+  policyHistory: { tick: number; key: PolicyKey; value: number }[];
+  foodSecurity: number;
+  military: number;
+  migIn: number;
+  migOut: number;
+  inTransit: number;
+  parentTribeId: number;
+  successors: number[];
+  economy: string;
+  settlementIds: number[];
+  recentEvents: number[];
 }
 
 export interface SettlementView {
@@ -135,6 +164,20 @@ export interface SettlementView {
   destroyed: boolean;
   walls: boolean;
   farms: number;
+  state: SettlementState;
+  prosperity: number;
+  reserveDays: number;
+  crowding: number;
+  /** How well fed residents are, 0..1. */
+  nourishment: number;
+  /** Remaining structure fractions for drawing decay. */
+  wood: number;
+  stone: number;
+  wallCondition: number;
+  oldFarms: number[];
+  farmCondition: number;
+  reclaimed: boolean;
+  eras: number;
 }
 
 export interface WeatherView {
@@ -278,4 +321,93 @@ export interface ArchivedCreature {
   y: number;
   maxTravel: number;
   distance: number;
+}
+
+export interface SettlementEraView {
+  tribeId: number;
+  tribeName: string;
+  start: number;
+  end: number | null;
+  peak: number;
+  how: string;
+  endReason: string | null;
+}
+
+export interface MigrationGroupView {
+  id: number;
+  kind: MigrationKind;
+  tribeId: number;
+  hue: number;
+  x: number;
+  y: number;
+  ox: number;
+  oy: number;
+  dx: number;
+  dy: number;
+  size: number;
+  progress: number;
+  reason: string;
+  originId: number;
+  destId: number;
+  originName: string;
+  destName: string;
+  suitability: number;
+  started: number;
+  deaths: number;
+}
+
+export interface SettlementDetail {
+  id: number;
+  name: string;
+  tribeId: number;
+  tribeName: string;
+  tribeHue: number;
+  state: SettlementState;
+  stateSince: number;
+  tier: number;
+  tierName: string;
+  x: number;
+  y: number;
+  population: number;
+  populationChange: number;
+  housing: number;
+  peak: number;
+  founded: number;
+  abandonedTick: number | null;
+  foodProd: number;
+  foodCons: number;
+  imports: number;
+  reserveDays: number;
+  nourishment: number;
+  stock: { food: number; wood: number; stone: number; ore: number };
+  jobs: number;
+  employment: number;
+  water: number;
+  security: number;
+  disease: number;
+  crowding: number;
+  prosperity: number;
+  pressure: number;
+  mainProblem: string;
+  economy: string;
+  migIn: number;
+  migOut: number;
+  reserved: number;
+  groups: MigrationGroupView[];
+  structures: { wood: number; stone: number; walls: boolean; wallCondition: number; farms: number; farmCondition: number; health: number };
+  isCapital: boolean;
+  parentName: string | null;
+  eras: SettlementEraView[];
+  popHistory: number[];
+  events: SimEvent[];
+}
+
+export interface ObjectiveView {
+  id: number;
+  kind: string;
+  label: string;
+  status: 'active' | 'complete' | 'failed';
+  progress: number;
+  detail: string;
+  completedTick: number | null;
 }

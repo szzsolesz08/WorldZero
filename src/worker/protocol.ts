@@ -1,9 +1,10 @@
 import type { ScenarioConfig } from '../engine/scenarios';
 import type { SimState, Fx } from '../engine/simulation';
 import type {
-  CreatureDetail, EnvironmentView, GodCommand, HistorySeries, SettlementView, SimEvent, SpeciesView, StatsSummary,
-  TribeView, WeatherView,
+  CreatureDetail, EnvironmentView, GodCommand, HistorySeries, MigrationGroupView, ObjectiveView, SettlementDetail, SettlementView,
+  SimEvent, SpeciesView, StatsSummary, TribeView, WeatherView,
 } from '../engine/types';
+import type { CivCounters } from '../engine/civ/civilization';
 import type { Landmass } from '../engine/world/world';
 
 export interface TerrainPayload {
@@ -35,7 +36,10 @@ export interface FramePayload {
   tick: number;
   count: number;
   buf: Float32Array;
+  /** Every settlement still visible on the map: active towns, abandoned places and ruins (not land fully reclaimed). */
   settlements: SettlementView[];
+  /** Migration groups on the road. */
+  groups: MigrationGroupView[];
   weather: WeatherView[];
   carcasses: number[];
   fx: Fx[];
@@ -55,6 +59,8 @@ export interface StatsPayload {
   deathCauses: Record<string, number>;
   scenarioName: string;
   seed: string;
+  objectives: ObjectiveView[];
+  counters: CivCounters;
 }
 
 export type ToWorker =
@@ -63,6 +69,7 @@ export type ToWorker =
   | { t: 'speed'; tps: number; paused: boolean }
   | { t: 'cmd'; cmd: GodCommand }
   | { t: 'select'; id: number | null }
+  | { t: 'selectSettlement'; id: number | null }
   | { t: 'save'; reqId: number }
   | { t: 'step'; ticks: number };
 
@@ -73,6 +80,7 @@ export type FromWorker =
   | { t: 'frame'; frame: FramePayload }
   | { t: 'stats'; stats: StatsPayload }
   | { t: 'creature'; detail: CreatureDetail | null }
+  | { t: 'settlement'; detail: SettlementDetail | null }
   | { t: 'saved'; reqId: number; state: SimState }
   | { t: 'progress'; done: number; total: number; label: string }
   | { t: 'away'; ticks: number; events: SimEvent[]; popBefore: number; popAfter: number }

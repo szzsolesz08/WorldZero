@@ -5,9 +5,13 @@ import { LineChart } from './charts/LineChart';
 import { SpeciesStack } from './charts/SpeciesStack';
 import { PhyloTree } from './charts/PhyloTree';
 import { fmtNum, fmtDate, hsl } from './charts/common';
-import { getClient } from './client';
+import { getClient, selectCreature, selectSettlement } from './client';
+import { EventRow, selectEvent } from './EventRow';
+import { GOAL_LABEL, POLICY_LABEL, POLICY_DELAY } from '../engine/civ/strategy';
+import { STATE_LABEL } from '../engine/civ/settlements';
+import { TICKS_PER_DAY } from '../engine/constants';
+import { POLICY_KEYS } from '../engine/types';
 import { getRenderer } from './WorldView';
-import { EventIcon } from './EventIcon';
 import { TECHS } from '../engine/civ/tech';
 import { GENE_LABELS } from '../engine/creatures/genome';
 import type { SimEvent, SpeciesView, TribeView, SimParamKey } from '../engine/types';
@@ -56,6 +60,29 @@ function useHistory() {
   return h && h.tick && h.tick.length ? h : null;
 }
 
+function Objectives() {
+  const objectives = useUI((s) => s.objectives);
+  if (!objectives.length) return null;
+  const done = objectives.filter((o) => o.status === 'complete').length;
+  return (
+    <section className="section">
+      <div className="section-head"><h2>Objectives</h2><span className="aside">{done} of {objectives.length} achieved</span></div>
+      <div className="objectives">
+        {objectives.map((o) => (
+          <div key={o.id} className={`objective s-${o.status}`}>
+            <div className="vital-label">
+              <span>{o.label}</span>
+              <b>{o.status === 'complete' ? 'Achieved' : o.status === 'failed' ? 'Failed' : `${Math.round(o.progress * 100)}%`}</b>
+            </div>
+            <div className="meter"><div style={{ width: `${o.progress * 100}%`, background: o.status === 'failed' ? 'var(--danger)' : o.status === 'complete' ? 'var(--good)' : 'var(--text-2)' }} /></div>
+            <small>{o.detail}{o.completedTick !== null ? ` · ${fmtDate(o.completedTick)}` : ''}</small>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 // ---------------------------------------------------------------- Overview
 
 function Overview() {
@@ -73,6 +100,7 @@ function Overview() {
   const change = pop.length > 3 ? `${delta >= 0 ? '+' : ''}${fmtNum(delta)} today` : undefined;
   return (
     <>
+      <Objectives />
       <section className="section">
         {h ? (
           <LineChart title={`Population · ${fmtNum(s.population)} living`} aside={change} x={h.tick}
@@ -219,6 +247,7 @@ function Civilizations() {
   const selected = useUI((s) => s.selectedTribe);
   const set = useUI((s) => s.set);
   const species = useUI((s) => s.species);
+  const counters = useUI((s) => s.counters);
   const active = tribes.filter((t) => !t.collapsed).sort((a, b) => b.population - a.population);
   const fallen = tribes.filter((t) => t.collapsed).sort((a, b) => (b.collapsedTick ?? 0) - (a.collapsedTick ?? 0));
   const ref = useRef<HTMLDivElement>(null);
@@ -253,6 +282,20 @@ function Civilizations() {
           <div className="fact"><dt>Fallen</dt><dd className="num">{fallen.length}</dd></div>
         </dl>
       </section>
+      {counters && counters.groups + counters.abandoned + counters.secessions > 0 && (
+        <section className="section">
+          <div className="section-head"><h2>Movements and change</h2><span className="aside">all time</span></div>
+          <dl className="kv">
+            <dt>On the road now</dt><dd>{active.reduce((a, t) => a + t.inTransit, 0)} people</dd>
+            <dt>Journeys · arrived · lost</dt><dd>{counters.groups} · {counters.arrived} · {counters.lost}</dd>
+            <dt>Migrants · refugees</dt><dd>{counters.migrants} · {counters.refugees}</dd>
+            <dt>Stranded on the way</dt><dd>{counters.stranded}</dd>
+            <dt>Settlements founded · colonies</dt><dd>{counters.founded} · {counters.colonies}</dd>
+            <dt>Abandoned · resettled</dt><dd>{counters.abandoned} · {counters.resettled}</dd>
+            <dt>Rebellions</dt><dd>{counters.secessions}</dd>
+          </dl>
+        </section>
+      )}
       <section className="section">
         {active.map((t) => (
           <TribeCard key={t.id} t={t} open={selected === t.id} onToggle={() => set({ selectedTribe: selected === t.id ? null : t.id })}
@@ -277,9 +320,39 @@ function Civilizations() {
   );
 }
 
+/** A civilization's towns, read from the frame stream (state and population update live). */
+function TribeSettlements({ ids, capitalId }: { ids: number[]; capitalId: number }) {
+  const [, force] = useState(0);
+  useEffect(() => {
+    const t = window.setInterval(() => force((x) => x + 1), 1000);
+    return () => window.clearInterval(t);
+  }, []);
+  const frame = getClient().frame;
+  const list = (frame?.settlements ?? []).filter((s) => ids.includes(s.id)).sort((a, b) => b.population - a.population);
+  if (!list.length) return null;
+  return (
+    <>
+      <h4>Settlements</h4>
+      <div className="rows">
+        {list.map((s) => (
+          <button className="row" key={s.id} onClick={() => selectSettlement(s.id)} style={{ gridTemplateColumns: '1fr auto auto' }}>
+            <span className="r-name"><b>{s.name}{s.id === capitalId ? ' · capital' : ''}</b><small>{['Camp', 'Village', 'Town', 'City'][s.tier]}</small></span>
+            <span className={`chip st-${s.state}`}>{STATE_LABEL[s.state]}</span>
+            <span className="r-val num">{s.population}</span>
+          </button>
+        ))}
+      </div>
+    </>
+  );
+}
+
 function TribeCard({ t, open, onToggle, tribes, speciesName }: { t: TribeView; open: boolean; onToggle: () => void; tribes: TribeView[]; speciesName: string }) {
-  const set = useUI((s) => s.set);
+  const now = useUI((s) => s.env?.tick ?? 0);
+  const allEvents = useUI((s) => s.events);
   const known = new Set(t.techs);
+  const parent = t.parentTribeId >= 0 ? tribes.find((x) => x.id === t.parentTribeId) : undefined;
+  const recentIds = new Set(t.recentEvents);
+  const recent = open ? allEvents.filter((e) => recentIds.has(e.id)).slice(-6).reverse() : [];
   return (
     <div className="tribe-card" data-tribe={t.id}>
       <button className="tribe-head" onClick={onToggle} aria-expanded={open}>
@@ -294,14 +367,58 @@ function TribeCard({ t, open, onToggle, tribes, speciesName }: { t: TribeView; o
         <div className="tribe-body">
           <div style={{ display: 'flex', gap: 6, marginTop: 10 }}>
             <button className="btn sm" onClick={() => flyTo(t.homeX, t.homeY, 8)}><LocateFixed size={13} />Locate</button>
-            <button className="btn sm" onClick={() => { set({ selectedCreature: t.leaderId, creature: null }); getClient().select(t.leaderId); }}>Leader: {t.leaderName}</button>
+            <button className="btn sm" onClick={() => selectCreature(t.leaderId)}>Leader: {t.leaderName}</button>
           </div>
           <dl className="kv" style={{ marginTop: 10 }}>
             <dt>Founded</dt><dd>{fmtDate(t.founded)}</dd>
+            <dt>Capital</dt><dd>{t.capitalId >= 0 ? <button className="table-toggle" onClick={() => selectSettlement(t.capitalId)}>{t.capitalName}</button> : 'None (nomadic)'}</dd>
             <dt>Territory</dt><dd>{t.territory} tiles</dd>
             <dt>Peak population</dt><dd>{t.peak}</dd>
+            <dt>Economy</dt><dd>{t.economy}</dd>
+            <dt>Military strength</dt><dd>{t.military.toFixed(1)}</dd>
+            <dt>Moved in · out · on the road</dt><dd>{t.migIn} · {t.migOut} · {t.inTransit}</dd>
             <dt>Stores</dt><dd>{t.stock.food} food · {t.stock.wood} wood · {t.stock.stone} stone{t.stock.ore ? ` · ${t.stock.ore} ore` : ''}</dd>
+            {parent && <><dt>Broke away from</dt><dd>{parent.name}</dd></>}
+            {t.successors.length > 0 && <><dt>Successor states</dt><dd>{t.successors.map((id) => tribes.find((x) => x.id === id)?.name ?? '?').join(', ')}</dd></>}
           </dl>
+          <div className="vitals" style={{ marginTop: 10 }}>
+            <div>
+              <div className="vital-label"><span>Stability</span><b>{Math.round(t.stability * 100)}%</b></div>
+              <div className="meter"><div style={{ width: `${t.stability * 100}%`, background: t.stability < 0.3 ? 'var(--danger)' : t.stability < 0.5 ? 'var(--amber)' : 'var(--good)' }} /></div>
+            </div>
+            <div>
+              <div className="vital-label"><span>Food security</span><b>{Math.round(t.foodSecurity * 100)}%</b></div>
+              <div className="meter"><div style={{ width: `${t.foodSecurity * 100}%`, background: t.foodSecurity < 0.4 ? 'var(--danger)' : t.foodSecurity < 0.55 ? 'var(--amber)' : 'var(--good)' }} /></div>
+            </div>
+          </div>
+          {t.instability && <div className="muted" style={{ fontSize: 11.5, marginTop: 6 }}>Unrest: {t.instability}.</div>}
+          <h4>Priorities</h4>
+          {t.goals.length === 0 ? <div className="muted" style={{ fontSize: 12 }}>Still finding its way.</div> : (
+            <ol className="goals">{t.goals.map((g, i) => <li key={g} className={i === 0 ? 'top' : undefined}>{GOAL_LABEL[g]}</li>)}</ol>
+          )}
+          <h4>Policies <span className="muted" style={{ fontWeight: 400 }}>· changes take {POLICY_DELAY / TICKS_PER_DAY} days and cost stability</span></h4>
+          <div className="policies">
+            {POLICY_KEYS.map((k) => {
+              const pend = t.pendingPolicies.find((p) => p.key === k);
+              const cur = t.policies[k] ?? 0;
+              return (
+                <div className="policy" key={k}>
+                  <span className="p-label">{POLICY_LABEL[k]}</span>
+                  <div className="seg" role="group" aria-label={`${POLICY_LABEL[k]} policy`}>
+                    {([-1, 0, 1] as const).map((v) => (
+                      <button key={v} aria-pressed={cur === v} className={pend?.value === v ? 'pending' : undefined}
+                        onClick={() => getClient().command({ type: 'setPolicy', tribeId: t.id, key: k, value: v })}
+                        title={pend?.value === v ? `Takes effect in ${Math.max(0, (pend.effectiveAt - now) / TICKS_PER_DAY).toFixed(1)} days` : undefined}>
+                        {v === -1 ? 'Low' : v === 0 ? 'Balanced' : 'High'}
+                      </button>
+                    ))}
+                  </div>
+                  {pend && <small className="p-pend">→ {pend.value === -1 ? 'Low' : pend.value === 0 ? 'Balanced' : 'High'} in {Math.max(0, (pend.effectiveAt - now) / TICKS_PER_DAY).toFixed(1)} d</small>}
+                </div>
+              );
+            })}
+          </div>
+          {t.settlementIds.length > 0 && <TribeSettlements ids={t.settlementIds} capitalId={t.capitalId} />}
           <h4>Culture</h4>
           {(['militarism', 'openness', 'scholarship', 'agrarian'] as const).map((k) => (
             <div className="trait" key={k}>
@@ -334,6 +451,12 @@ function TribeCard({ t, open, onToggle, tribes, speciesName }: { t: TribeView; o
                 );
               })}
             </div>
+          )}
+          {recent.length > 0 && (
+            <>
+              <h4>Recent history</h4>
+              <div className="ev-list">{recent.map((e) => <EventRow key={e.id} e={e} compact />)}</div>
+            </>
           )}
           {t.history.length > 2 && (
             <div style={{ marginTop: 10 }}>
@@ -447,26 +570,28 @@ const FILTERS: { id: string; label: string; match: (e: SimEvent) => boolean }[] 
   { id: 'major', label: 'Major', match: (e) => e.level >= 3 },
   { id: 'life', label: 'Life', match: (e) => e.cat === 'species' || e.cat === 'evolution' || e.cat === 'creature' },
   { id: 'civ', label: 'Civilization', match: (e) => e.cat === 'civ' || e.cat === 'war' },
+  { id: 'settle', label: 'Towns', match: (e) => e.cat === 'settlement' || e.cat === 'migration' },
   { id: 'disaster', label: 'Disasters', match: (e) => e.cat === 'disaster' || e.cat === 'climate' },
 ];
 
-export function selectEvent(e: SimEvent): void {
-  const st = useUI.getState();
-  if (e.x !== undefined && e.y !== undefined) flyTo(e.x, e.y, 8);
-  if (e.creatureId !== undefined) {
-    st.set({ selectedCreature: e.creatureId, creature: null });
-    getClient().select(e.creatureId);
-  }
-  if (e.tribeId !== undefined && (e.cat === 'civ' || e.cat === 'war')) st.set({ selectedTribe: e.tribeId });
-}
+export { selectEvent };
 
 function Chronicle() {
   const events = useUI((s) => s.events);
+  const focus = useUI((s) => s.focusEvent);
   const [f, setF] = useState('all');
+  const listRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { if (focus !== null) setF('all'); }, [focus]);
   const list = useMemo(() => {
     const m = FILTERS.find((x) => x.id === f)!.match;
-    return events.filter((e) => m(e) && (f !== 'all' || e.level >= 2 || e.cat === 'civ')).slice().reverse().slice(0, 300);
-  }, [events, f]);
+    return events.filter((e) => e.id === focus || (m(e) && (f !== 'all' || e.level >= 2 || e.cat === 'civ' || e.cat === 'settlement'))).slice().reverse().slice(0, 300);
+  }, [events, f, focus]);
+  useEffect(() => {
+    if (focus === null) return;
+    listRef.current?.querySelector(`[data-ev="${focus}"]`)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    const t = window.setTimeout(() => useUI.getState().set({ focusEvent: null }), 2600);
+    return () => window.clearTimeout(t);
+  }, [focus, list]);
   return (
     <>
       <div style={{ padding: '12px 0 8px', position: 'sticky', top: 0, background: 'var(--panel-solid)', zIndex: 2 }}>
@@ -475,16 +600,8 @@ function Chronicle() {
         </div>
       </div>
       {list.length === 0 ? <div className="empty">Nothing recorded here yet. History is being written as you watch.</div> : (
-        <div className="ev-list">
-          {list.map((e) => (
-            <button key={e.id} className={`ev lvl-${e.level}`} onClick={() => selectEvent(e)} title={e.x !== undefined ? 'Show on map' : undefined}>
-              <EventIcon cat={e.cat} />
-              <span>
-                <b>{e.title}</b><small>{fmtDate(e.tick)}</small>
-                <p>{e.text}</p>
-              </span>
-            </button>
-          ))}
+        <div className="ev-list" ref={listRef}>
+          {list.map((e) => <EventRow key={e.id} e={e} focused={e.id === focus} />)}
         </div>
       )}
     </>
