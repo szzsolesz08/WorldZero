@@ -84,6 +84,10 @@ export class SimClient {
     this.send({ t: 'select', id });
   }
 
+  selectSettlement(id: number | null): void {
+    this.send({ t: 'selectSettlement', id });
+  }
+
   save(): Promise<SimState> {
     const id = this.reqId++;
     return new Promise((resolve) => {

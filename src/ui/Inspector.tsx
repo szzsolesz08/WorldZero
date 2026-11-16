@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { X, Crosshair, LocateFixed, HeartPulse } from 'lucide-react';
 import { useUI } from '../client/store';
-import { getClient } from './client';
+import { getClient, selectCreature as select, selectSettlement } from './client';
 import { flyTo } from './Dashboard';
 import { creatureSprite } from '../render/sprites';
 import { GENE_LABELS, GENES } from '../engine/creatures/genome';
@@ -15,8 +15,7 @@ const ACTION_LABEL: Record<string, string> = {
 };
 
 function selectCreature(id: number): void {
-  useUI.getState().set({ selectedCreature: id, creature: null });
-  getClient().select(id);
+  select(id);
 }
 
 function Portrait({ c }: { c: CreatureDetail }) {
@@ -83,7 +82,7 @@ export function Inspector() {
   const set = useUI((s) => s.set);
   const species = useUI((s) => s.species);
   if (id === null) return null;
-  const close = () => { set({ selectedCreature: null, creature: null, follow: false }); getClient().select(null); };
+  const close = () => select(null);
   if (!c) {
     return (
       <aside className="inspector panel" aria-label="Creature inspector">
@@ -130,7 +129,7 @@ export function Inspector() {
             <dt>Born</dt><dd>{fmtDate(c.birthTick)}</dd>
             {c.alive && <><dt>Location</dt><dd>{c.biome}{c.landmass ? `, ${c.landmass}` : ''}</dd></>}
             {c.tribe && <><dt>Tribe</dt><dd><button className="table-toggle" onClick={() => set({ selectedTribe: c.tribe!.id, panel: 'civ', panelOpen: true })}>{c.tribe.name}</button></dd></>}
-            {c.home && <><dt>Home</dt><dd>{c.home.name}</dd></>}
+            {c.home && <><dt>Home</dt><dd><button className="table-toggle" onClick={() => selectSettlement(c.home!.id)}>{c.home.name}</button></dd></>}
             <dt>Travelled</dt><dd>{Math.round(c.distance)} leagues · {Math.round(c.maxTravel)} from birthplace</dd>
             <dt>Offspring · kills</dt><dd>{c.children} · {c.kills}</dd>
           </dl>

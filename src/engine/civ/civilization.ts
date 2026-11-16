@@ -5,13 +5,20 @@ import { BIOMES } from '../world/biomes';
 import { TECH_BY_ID, availableTechs } from './tech';
 import { settlementName, tribeName } from '../creatures/names';
 import {
-  CIV_INTERVAL, PLANT_ENERGY, TRIBE_MIN_FOUNDERS, TRIBE_MIN_INT, TRIBE_MIN_SOCIAL, TICKS_PER_DAY,
+  CIV_INTERVAL, PLANT_ENERGY, TRIBE_MIN_FOUNDERS, TRIBE_MIN_INT, TRIBE_MIN_SOCIAL, TICKS_PER_DAY, TICKS_PER_SEASON,
 } from '../constants';
-import type { Job, SettlementView, TribeView } from '../types';
+import type { GoalId, Job, PolicyKey, SettlementDetail, SettlementView, SimEvent, TribeView } from '../types';
 import { genomeToRecord } from '../creatures/genome';
 import { dist2d } from '../mathutil';
+import {
+  Settlement, Stock, newSettlement, updateEconomy, evaluateLifecycle, deteriorate, abandon, resettle, residualClaim,
+  settlementView, structurePoints, housingOf, settlementEvent, currentEra, TIER_NAMES, STATE_LABEL, PASSES_PER_DAY,
+} from './settlements';
+import { MigrationGroup, planMigration, updateGroups, makeRefugees, groupView } from './migration';
+import { updateStrategy, defaultPolicies, goalW, pol, GOAL_LABEL } from './strategy';
 
-export interface Stock { food: number; wood: number; stone: number; ore: number }
+export type { Settlement, Stock };
+
 export interface Culture { militarism: number; openness: number; scholarship: number; agrarian: number }
 
 export interface Tribe {
@@ -22,10 +29,11 @@ export interface Tribe {
   founded: number;
   leaderId: number;
   leaderName: string;
+  leaderSince: number;
   population: number;
   peak: number;
   settlementIds: number[];
-  stock: Stock;
+  capitalId: number;
   research: number;
   techs: string[];
   current: string | null;
@@ -44,23 +52,31 @@ export interface Tribe {
   history: number[];
   kills: number;
   losses: number;
-}
-
-export interface Settlement {
-  id: number;
-  tribeId: number;
-  name: string;
-  x: number;
-  y: number;
-  tier: number;
-  founded: number;
-  health: number;
-  population: number;
-  buildings: number;
-  walls: boolean;
-  farms: number[];
-  destroyed: boolean;
-  destroyedTick: number;
+  stability: number;
+  lowStabilitySince: number;
+  instability: string;
+  instabilityCause: number;
+  goals: GoalId[];
+  policies: Record<PolicyKey, number>;
+  pendingPolicies: { key: PolicyKey; value: number; effectiveAt: number }[];
+  policyHistory: { tick: number; key: PolicyKey; value: number }[];
+  parentTribeId: number;
+  successors: number[];
+  lastSecession: number;
+  lastExpansion: number;
+  lastGoalEvent: number;
+  capitalLostTick: number;
+  popAtCapitalLoss: number;
+  recentLossTick: number;
+  declining: boolean;
+  declinePeak: number;
+  lowPoint: number;
+  migIn: number;
+  migOut: number;
+  foodSecurity: number;
+  military: number;
+  economy: string;
+  events: number[];
 }
 
 interface DiploRel {
@@ -70,9 +86,15 @@ interface DiploRel {
   status: 'peace' | 'alliance' | 'war';
   since: number;
   traded: boolean;
+  causeId?: number;
 }
 
-const TIER_NAMES = ['Camp', 'Village', 'Town', 'City'];
+export interface CivCounters {
+  founded: number; colonies: number; abandoned: number; resettled: number; groups: number; migrants: number;
+  arrived: number; failed: number; lost: number; stranded: number; refugees: number; refugeeGroups: number; colonistGroups: number;
+  secessions: number; declines: number; recoveries: number; migrantDeaths: number; borderShifts: number;
+}
+
 const CAPACITY = [14, 32, 70, 150];
 const TRADITIONS: { name: string; w: (t: Tribe, ctx: { cold: boolean; coastal: boolean; mountain: boolean }) => number }[] = [
   { name: 'Ancestor Veneration', w: () => 1 },
@@ -94,6 +116,14 @@ const TRADITIONS: { name: string; w: (t: Tribe, ctx: { cold: boolean; coastal: b
 ];
 
 const qbuf: Creature[] = [];
+const clamp = (x: number, a: number, b: number) => (x < a ? a : x > b ? b : x);
+
+export function emptyCounters(): CivCounters {
+  return {
+    founded: 0, colonies: 0, abandoned: 0, resettled: 0, groups: 0, migrants: 0, arrived: 0, failed: 0, lost: 0, stranded: 0, refugees: 0,
+    refugeeGroups: 0, colonistGroups: 0, secessions: 0, declines: 0, recoveries: 0, migrantDeaths: 0, borderShifts: 0,
+  };
+}
 
 export class CivManager {
   tribes: Tribe[] = [];
@@ -101,18 +131,31 @@ export class CivManager {
   tribeById = new Map<number, Tribe>();
   settlementById = new Map<number, Settlement>();
   relations = new Map<string, DiploRel>();
+  groups: MigrationGroup[] = [];
+  groupById = new Map<number, MigrationGroup>();
   nextTribeId = 1;
   nextSettlementId = 1;
+  nextGroupId = 1;
   pass = 0;
   firstTech = new Set<string>();
   firstTier = new Set<number>();
   territoryDirty = true;
+  counters: CivCounters = emptyCounters();
+  /** Tribe id -> id of the event describing its latest loss (for causal links). */
+  lastLossEvent = new Map<number, number>();
+  /** Border-shift reporting throttle: "a:b" -> tick. */
+  borderReported = new Map<string, number>();
+  // Transient (rebuilt every pass): residents per settlement, homeless members per tribe.
+  residents = new Map<number, Creature[]>();
+  homeless = new Map<number, Creature[]>();
 
   tribe(id: number): Tribe | undefined { return this.tribeById.get(id); }
+  /** Active (inhabited) settlement, or undefined. */
   settlement(id: number): Settlement | undefined {
     const s = this.settlementById.get(id);
     return s && !s.destroyed ? s : undefined;
   }
+  group(id: number): MigrationGroup | undefined { return this.groupById.get(id); }
 
   activeTribes(): Tribe[] { return this.tribes.filter((t) => !t.collapsed); }
   activeSettlements(): Settlement[] { return this.settlements.filter((s) => !s.destroyed); }
@@ -124,8 +167,11 @@ export class CivManager {
 
   private key(a: number, b: number): string { return a < b ? `${a}:${b}` : `${b}:${a}`; }
   rel(a: number, b: number): DiploRel | undefined { return this.relations.get(this.key(a, b)); }
-
   atWar(a: number, b: number): boolean { return this.rel(a, b)?.status === 'war'; }
+
+  setRelation(a: number, b: number, value: number, status: DiploRel['status'], tick: number): void {
+    this.relations.set(this.key(a, b), { a: Math.min(a, b), b: Math.max(a, b), value, status, since: tick, traded: false });
+  }
 
   hasEnemies(tribeId: number): boolean {
     for (const r of this.relations.values()) if (r.status === 'war' && (r.a === tribeId || r.b === tribeId)) return true;
@@ -144,6 +190,25 @@ export class CivManager {
     return out;
   }
 
+  /** A neighbouring rival noticeably weaker than this tribe (for conquest goals). */
+  weakerNeighbor(sim: Simulation, t: Tribe): boolean {
+    for (const o of this.tribes) {
+      if (o.collapsed || o.id === t.id) continue;
+      const r = this.rel(t.id, o.id);
+      if (!r || r.status === 'alliance') continue;
+      if (dist2d(o.homeX - t.homeX, o.homeY - t.homeY) < 45 && o.military < t.military * 0.6) return true;
+    }
+    return false;
+  }
+
+  /** Push an event attributed to a tribe and keep it in the tribe's recent history. */
+  tribeEvent(sim: Simulation, t: Tribe, e: { cat: SimEvent['cat']; level: 1 | 2 | 3; title: string; text: string; causeId?: number }): SimEvent {
+    const ev = sim.events.push({ ...e, tick: sim.tick, x: t.homeX, y: t.homeY, tribeId: t.id });
+    t.events.push(ev.id);
+    if (t.events.length > 30) t.events.shift();
+    return ev;
+  }
+
   shelterFor(c: Creature): number {
     if (c.homeId < 0) return 0;
     const s = this.settlement(c.homeId);
@@ -156,10 +221,7 @@ export class CivManager {
     return c.tribeId >= 0 && this.hasTech(c.tribeId, 'medicine') ? 1.6 : 1;
   }
 
-  combatBonus(c: Creature): number {
-    if (c.tribeId < 0) return 1;
-    const t = this.tribeById.get(c.tribeId);
-    if (!t) return 1;
+  combatBonusFor(t: Tribe): number {
     let b = 1;
     if (t.techs.includes('hunting')) b += 0.35;
     if (t.techs.includes('bronze')) b += 0.5;
@@ -167,12 +229,18 @@ export class CivManager {
     return b;
   }
 
+  combatBonus(c: Creature): number {
+    if (c.tribeId < 0) return 1;
+    const t = this.tribeById.get(c.tribeId);
+    return t ? this.combatBonusFor(t) : 1;
+  }
+
   defenseBonus(c: Creature): number {
     if (c.tribeId < 0) return 1;
     let b = this.hasTech(c.tribeId, 'bronze') ? 1.2 : 1;
     if (c.homeId >= 0) {
       const s = this.settlement(c.homeId);
-      if (s && s.walls && Math.abs(s.x - c.x) + Math.abs(s.y - c.y) < 6) b *= 1.6;
+      if (s && s.walls && s.wallCondition > 0.3 && Math.abs(s.x - c.x) + Math.abs(s.y - c.y) < 6) b *= 1.6;
     }
     return b;
   }
@@ -196,13 +264,27 @@ export class CivManager {
     if (t.waterSpots.length > 8) t.waterSpots.shift();
   }
 
+  /** Eat from the home settlement's stores. */
   eatFromStore(c: Creature): void {
-    const t = this.tribeById.get(c.tribeId);
-    if (!t) return;
+    const s = c.homeId >= 0 ? this.settlement(c.homeId) : undefined;
+    if (!s) return;
     const need = (c.maxEnergy * 0.95 - c.energy) / (PLANT_ENERGY * 0.9);
-    const take = Math.max(0, Math.min(t.stock.food, need));
-    t.stock.food -= take;
+    const take = Math.max(0, Math.min(s.stock.food, need));
+    s.stock.food -= take;
+    s.consAcc += take;
     c.energy += take * PLANT_ENERGY * 0.9;
+  }
+
+  /** Called by Simulation.kill for tribe members and migrants. */
+  onDeath(c: Creature, killed: boolean): void {
+    if (c.migrationId >= 0) {
+      const g = this.groupById.get(c.migrationId);
+      if (g) { g.deaths++; this.counters.migrantDeaths++; }
+    }
+    if (killed && c.homeId >= 0) {
+      const s = this.settlementById.get(c.homeId);
+      if (s && !s.destroyed) s.threat += 0.12;
+    }
   }
 
   // ---------------------------------------------------------------- Update
@@ -211,34 +293,49 @@ export class CivManager {
     this.pass++;
     this.refreshMembership(sim);
     this.formTribes(sim);
+    for (const s of this.settlements) {
+      if (s.destroyed) { deteriorate(sim, this, s); continue; }
+      updateEconomy(sim, this, s, this.residents.get(s.id) ?? []);
+      evaluateLifecycle(sim, this, s);
+    }
     for (const t of this.tribes) {
       if (t.collapsed) continue;
       this.research(sim, t);
       this.manageSettlements(sim, t);
+      if ((this.pass + t.id) % 10 === 0) updateStrategy(sim, this, t);
+      if ((this.pass + t.id) % 4 === 0) planMigration(sim, this, t);
       if (this.pass % 10 === 0) {
         t.history.push(t.population);
-        if (t.history.length > 160) t.history.shift();
+        if (t.history.length > 300) t.history.shift();
       }
     }
+    updateGroups(sim, this);
     if (this.pass % 5 === 0) this.diplomacy(sim);
     if (this.pass % 4 === 0 || this.territoryDirty) this.computeTerritory(sim);
   }
 
   private refreshMembership(sim: Simulation): void {
     const members = new Map<number, Creature[]>();
+    this.residents.clear();
+    this.homeless.clear();
     for (const s of this.settlements) s.population = 0;
     for (const c of sim.creatures) {
       if (!c.alive || c.tribeId < 0) continue;
       const t = this.tribeById.get(c.tribeId);
-      if (!t || t.collapsed) { c.tribeId = -1; c.homeId = -1; c.job = null; continue; }
+      if (!t || t.collapsed) { c.tribeId = -1; c.homeId = -1; c.migrationId = -1; c.job = null; continue; }
       let m = members.get(c.tribeId);
       if (!m) { m = []; members.set(c.tribeId, m); }
       m.push(c);
+      if (c.migrationId >= 0) {
+        if (this.groupById.has(c.migrationId)) { c.homeId = -1; continue; }
+        c.migrationId = -1;
+      }
       if (c.homeId >= 0) {
         const s = this.settlement(c.homeId);
         if (!s || s.tribeId !== c.tribeId) c.homeId = -1;
       }
       if (c.homeId < 0 && t.settlementIds.length > 0) {
+        // Members close to one of their settlements simply move in; distant ones regroup and travel.
         let best: Settlement | undefined, bd = Infinity;
         for (const sid of t.settlementIds) {
           const s = this.settlement(sid);
@@ -246,48 +343,59 @@ export class CivManager {
           const d = Math.abs(s.x - c.x) + Math.abs(s.y - c.y);
           if (d < bd) { bd = d; best = s; }
         }
-        if (best) c.homeId = best.id;
+        if (best && bd < 25) c.homeId = best.id;
       }
-      if (c.homeId >= 0) this.settlementById.get(c.homeId)!.population++;
+      if (c.homeId >= 0) {
+        const s = this.settlementById.get(c.homeId)!;
+        s.population++;
+        let r = this.residents.get(s.id);
+        if (!r) { r = []; this.residents.set(s.id, r); }
+        r.push(c);
+      } else {
+        let h = this.homeless.get(t.id);
+        if (!h) { h = []; this.homeless.set(t.id, h); }
+        h.push(c);
+      }
     }
     for (const t of this.tribes) {
       if (t.collapsed) continue;
       const m = members.get(t.id) ?? [];
       t.population = m.length;
       if (t.population > t.peak) t.peak = t.population;
-      t.settlementIds = t.settlementIds.filter((id) => this.settlement(id));
+      t.settlementIds = t.settlementIds.filter((id) => { const s = this.settlement(id); return !!s && s.tribeId === t.id; });
       const leader = sim.byId.get(t.leaderId);
       if (m.length === 0) {
         this.collapse(sim, t, 'its last member perished');
         continue;
       }
       if (m.length < 2 || (m.length < 3 && t.settlementIds.length === 0 && sim.tick - t.founded > TICKS_PER_DAY * 10)) {
-        for (const c of m) { c.tribeId = -1; c.homeId = -1; c.job = null; }
+        for (const c of m) { c.tribeId = -1; c.homeId = -1; c.migrationId = -1; c.job = null; }
         this.collapse(sim, t, 'its few survivors scattered');
         continue;
       }
       if (!leader || !leader.alive || leader.tribeId !== t.id) {
         let best = m[0], bs = -Infinity;
         for (const c of m) {
-          const s = c.intelligence * 2 + c.age / c.lifespan + c.strength * 0.3 + (c.mature ? 1 : -5);
+          // Experience counts, but a people looks for a leader with years ahead of them.
+          const life = c.age / c.lifespan;
+          const s = c.intelligence * 2 + Math.min(life, 0.5) * 1.2 - Math.max(0, life - 0.75) * 3 + c.strength * 0.3 + (c.mature ? 1 : -5) + (c.homeId === t.capitalId ? 0.5 : 0);
           if (s > bs) { bs = s; best = c; }
         }
         const old = t.leaderName;
         t.leaderId = best.id;
         t.leaderName = best.name;
+        t.leaderSince = sim.tick;
         best.title = 'Leader';
         best.remember(sim.tick, 'leader', `Became leader of ${t.name}`);
-        if (t.population >= 5) {
-          sim.events.push({ tick: sim.tick, cat: 'civ', level: 1, title: 'New leader', text: `${best.name} succeeds ${old} as leader of ${t.name}.`, x: best.x, y: best.y, tribeId: t.id, creatureId: best.id });
+        if (t.population >= 12) {
+          this.tribeEvent(sim, t, { cat: 'civ', level: 1, title: 'New leader', text: `${best.name} succeeds ${old} as leader of ${t.name}.` });
         }
       }
-      const leaderC = sim.byId.get(t.leaderId);
-      if (leaderC) {
-        if (t.settlementIds.length === 0) { t.homeX = leaderC.x; t.homeY = leaderC.y; }
-      }
-      if (t.settlementIds.length > 0) {
-        const cap = this.settlement(t.settlementIds[0]);
-        if (cap) { t.homeX = cap.x; t.homeY = cap.y; }
+      const cap = this.settlement(t.capitalId) ?? (t.settlementIds.length ? this.settlement(t.settlementIds[0]) : undefined);
+      if (cap) { t.homeX = cap.x; t.homeY = cap.y; }
+      else {
+        const leaderC = sim.byId.get(t.leaderId);
+        if (leaderC) { t.homeX = leaderC.x; t.homeY = leaderC.y; }
       }
     }
   }
@@ -296,26 +404,27 @@ export class CivManager {
     t.collapsed = true;
     t.collapsedTick = sim.tick;
     t.population = 0;
-    for (const sid of t.settlementIds) {
+    for (const sid of t.settlementIds.slice()) {
       const s = this.settlementById.get(sid);
-      if (s && !s.destroyed) this.ruin(sim, s);
+      if (s && !s.destroyed) abandon(sim, this, s, `${t.name} vanished`, -1, 'civ', false);
+    }
+    for (const g of this.groups.filter((x) => x.tribeId === t.id)) {
+      for (const id of g.members) { const c = sim.byId.get(id); if (c) c.migrationId = -1; }
+      this.groups = this.groups.filter((x) => x !== g);
+      this.groupById.delete(g.id);
     }
     for (const r of this.relations.values()) if (r.a === t.id || r.b === t.id) r.status = 'peace';
-    const big = t.peak >= 10 || t.settlementIds.length > 0;
-    sim.events.push({
-      tick: sim.tick, cat: 'civ', level: big ? 3 : 1,
+    const big = t.peak >= 10 || t.capitalId >= 0;
+    const ev = this.tribeEvent(sim, t, {
+      cat: 'civ', level: big ? 3 : 1,
       title: big ? 'Civilization collapsed' : 'Band dispersed',
       text: big ? `${t.name} has collapsed — ${reason}. At its height it numbered ${t.peak}.` : `${t.name} is no more: ${reason}.`,
-      x: t.homeX, y: t.homeY, tribeId: t.id,
+      causeId: this.lastLossEvent.get(t.id) ?? (t.instabilityCause >= 0 ? t.instabilityCause : undefined),
     });
-    this.territoryDirty = true;
-  }
-
-  private ruin(sim: Simulation, s: Settlement): void {
-    s.destroyed = true;
-    s.destroyedTick = sim.tick;
-    for (const f of s.farms) sim.world.farm[f] = 0;
-    s.farms = [];
+    // Each town it left behind remembers why it fell silent.
+    for (const s of this.settlements) {
+      if (s.destroyed && s.tribeId === t.id && s.destroyedTick === sim.tick) { s.events.push(ev.id); s.lastCause = ev.id; }
+    }
     this.territoryDirty = true;
   }
 
@@ -336,6 +445,7 @@ export class CivManager {
           if (t.speciesId !== c.speciesId) continue;
           if (Math.abs(s.x - c.x) + Math.abs(s.y - c.y) < 6 + s.tier * 2 && sim.rng.chance(0.3)) {
             c.tribeId = t.id; c.homeId = s.id;
+            s.population++; t.population++;
             c.remember(sim.tick, 'joined', `Joined ${t.name} at ${s.name}`);
             break;
           }
@@ -353,6 +463,70 @@ export class CivManager {
     }
   }
 
+  /** Create a tribe record (shared by new tribes and successor states). */
+  createTribeRecord(sim: Simulation, o: { name: string; speciesId: number; lang: number[]; culture: Culture; leader: Creature | null; founderX: number; founderY: number }): Tribe {
+    const t: Tribe = {
+      id: this.nextTribeId++,
+      name: o.name,
+      speciesId: o.speciesId,
+      hue: (this.nextTribeId * 0.618034) % 1,
+      founded: sim.tick,
+      leaderId: o.leader?.id ?? -1,
+      leaderName: o.leader?.name ?? '—',
+      leaderSince: sim.tick,
+      population: 0,
+      peak: 0,
+      settlementIds: [],
+      capitalId: -1,
+      research: 0,
+      techs: [],
+      current: null,
+      culture: o.culture,
+      archetype: archetypeOf(o.culture),
+      government: 'Nomadic Band',
+      traditions: [],
+      collapsed: false,
+      collapsedTick: null,
+      homeX: o.founderX,
+      homeY: o.founderY,
+      nomadicSince: sim.tick,
+      waterSpots: [],
+      lang: o.lang,
+      territory: 0,
+      history: [],
+      kills: 0,
+      losses: 0,
+      stability: 0.7,
+      lowStabilitySince: -1,
+      instability: '',
+      instabilityCause: -1,
+      goals: [],
+      policies: defaultPolicies(),
+      pendingPolicies: [],
+      policyHistory: [],
+      parentTribeId: -1,
+      successors: [],
+      lastSecession: -1e9,
+      lastExpansion: -1e9,
+      lastGoalEvent: -1e9,
+      capitalLostTick: -1e9,
+      popAtCapitalLoss: 0,
+      recentLossTick: -1e9,
+      declining: false,
+      declinePeak: 0,
+      lowPoint: 0,
+      migIn: 0,
+      migOut: 0,
+      foodSecurity: 0.6,
+      military: 0,
+      economy: 'Stable',
+      events: [],
+    };
+    this.tribes.push(t);
+    this.tribeById.set(t.id, t);
+    return t;
+  }
+
   createTribe(sim: Simulation, founders: Creature[]): Tribe {
     const rng = sim.rng;
     const sp = sim.species.get(founders[0].speciesId);
@@ -360,58 +534,26 @@ export class CivManager {
     const avg = (f: (c: Creature) => number) => founders.reduce((s, c) => s + f(c), 0) / founders.length;
     const leader = founders.reduce((a, b) => (b.intelligence > a.intelligence ? b : a));
     const tile = sim.world.tileAt(leader.x, leader.y);
-    const clamp = (x: number) => Math.max(0, Math.min(1, x));
     const culture: Culture = {
-      militarism: clamp(avg((c) => c.aggression) * 1.2 - 0.05 + rng.gauss(0, 0.12)),
-      openness: clamp(avg((c) => c.sociability) * 0.7 + (1 - avg((c) => c.aggression)) * 0.3 + rng.gauss(0, 0.12) - 0.05),
-      scholarship: clamp(avg((c) => c.intelligence) * 0.8 + avg((c) => c.curiosity) * 0.4 - 0.3 + rng.gauss(0, 0.12)),
-      agrarian: clamp(sim.world.fertility[tile] * 0.6 + rng.gauss(0.2, 0.15)),
+      militarism: clamp(avg((c) => c.aggression) * 1.2 - 0.05 + rng.gauss(0, 0.12), 0, 1),
+      openness: clamp(avg((c) => c.sociability) * 0.7 + (1 - avg((c) => c.aggression)) * 0.3 + rng.gauss(0, 0.12) - 0.05, 0, 1),
+      scholarship: clamp(avg((c) => c.intelligence) * 0.8 + avg((c) => c.curiosity) * 0.4 - 0.3 + rng.gauss(0, 0.12), 0, 1),
+      agrarian: clamp(sim.world.fertility[tile] * 0.6 + rng.gauss(0.2, 0.15), 0, 1),
     };
-    const t: Tribe = {
-      id: this.nextTribeId++,
-      name: tribeName(rng, lang),
-      speciesId: founders[0].speciesId,
-      hue: ((this.nextTribeId * 0.618034) % 1),
-      founded: sim.tick,
-      leaderId: leader.id,
-      leaderName: leader.name,
-      population: founders.length,
-      peak: founders.length,
-      settlementIds: [],
-      stock: { food: 0, wood: 0, stone: 0, ore: 0 },
-      research: 0,
-      techs: [],
-      current: null,
-      culture,
-      archetype: archetypeOf(culture),
-      government: 'Nomadic Band',
-      traditions: [],
-      collapsed: false,
-      collapsedTick: null,
-      homeX: leader.x,
-      homeY: leader.y,
-      nomadicSince: sim.tick,
-      waterSpots: [],
-      lang,
-      territory: 0,
-      history: [],
-      kills: 0,
-      losses: 0,
-    };
+    const t = this.createTribeRecord(sim, { name: tribeName(rng, lang), speciesId: founders[0].speciesId, lang, culture, leader, founderX: leader.x, founderY: leader.y });
+    t.population = founders.length;
+    t.peak = founders.length;
     this.addTradition(sim, t);
-    this.tribes.push(t);
-    this.tribeById.set(t.id, t);
     for (const c of founders) {
       c.tribeId = t.id;
       c.remember(sim.tick, 'tribe', c === leader ? `Founded ${t.name}` : `Joined ${t.name}, led by ${leader.name}`);
       if (c.waterX >= 0) t.waterSpots.push({ x: c.waterX, y: c.waterY });
     }
     leader.title = 'Founder';
-    sim.events.push({
-      tick: sim.tick, cat: 'civ', level: this.tribes.length === 1 ? 3 : 2,
+    this.tribeEvent(sim, t, {
+      cat: 'civ', level: this.tribes.length === 1 ? 3 : 2,
       title: this.tribes.length === 1 ? 'The first tribe' : 'A tribe has formed',
       text: `${founders.length} ${sp?.common ?? 'creatures'} gathered around ${leader.name} and became ${t.name} — a ${t.archetype.toLowerCase()} people who practice ${t.traditions[0]}.`,
-      x: leader.x, y: leader.y, tribeId: t.id, creatureId: leader.id, speciesId: t.speciesId,
     });
     return t;
   }
@@ -458,6 +600,7 @@ export class CivManager {
     }
     pts = Math.pow(pts, 0.8) * 0.3 * (0.6 + t.culture.scholarship) * (t.techs.includes('writing') ? 1.5 : 1) * (t.settlementIds.length > 0 ? 1.25 : 1);
     if (t.traditions.includes('Star Gazing') || t.traditions.includes('Storytelling Nights')) pts *= 1.1;
+    pts *= 1 + 0.3 * goalW(t, 'research') + 0.25 * pol(t, 'research') - 0.08 * Math.max(0, pol(t, 'military')) - 0.08 * Math.max(0, pol(t, 'stability'));
     t.research += pts;
     const def = TECH_BY_ID.get(t.current!)!;
     if (t.research >= def.cost) {
@@ -466,11 +609,10 @@ export class CivManager {
       t.current = null;
       const first = !this.firstTech.has(def.id);
       this.firstTech.add(def.id);
-      sim.events.push({
-        tick: sim.tick, cat: 'civ', level: first ? 2 : 1,
+      this.tribeEvent(sim, t, {
+        cat: 'civ', level: first ? 2 : 1,
         title: first ? `Discovery: ${def.name}` : `${def.name} learned`,
         text: first ? `${t.name} discovered ${def.name} — the first in the world. ${def.description}` : `${t.name} have learned ${def.name}.`,
-        x: t.homeX, y: t.homeY, tribeId: t.id,
       });
       this.updateGovernment(sim, t);
     }
@@ -487,18 +629,18 @@ export class CivManager {
       const old = t.government;
       t.government = g;
       if (old !== 'Nomadic Band' || g !== 'Chiefdom') {
-        sim.events.push({ tick: sim.tick, cat: 'civ', level: 2, title: 'New government', text: `${t.name} transformed from ${aOrAn(old)} into ${aOrAn(g)}.`, x: t.homeX, y: t.homeY, tribeId: t.id });
-      } else {
-        t.government = g;
+        this.tribeEvent(sim, t, { cat: 'civ', level: 2, title: 'New government', text: `${t.name} transformed from ${aOrAn(old)} into ${aOrAn(g)}.` });
       }
     }
   }
 
-  private siteScore(sim: Simulation, x: number, y: number, tribeId: number): number {
+  // ---------------------------------------------------------------- Sites
+
+  siteScore(sim: Simulation, x: number, y: number, tribeId: number): number {
     const w = sim.world;
     if (!w.inBounds(x, y)) return -10;
     const i = w.tileAt(x, y);
-    if (!w.isLand(i) || w.biome[i] === 16 || w.biome[i] === 14) return -10;
+    if (!w.isLand(i) || w.biome[i] === 16 || w.biome[i] === 14 || w.biome[i] === 15) return -10;
     let fert = 0, cnt = 0;
     for (let dy = -3; dy <= 3; dy += 2) for (let dx = -3; dx <= 3; dx += 2) {
       if (!w.inBounds(x + dx, y + dy)) continue;
@@ -518,40 +660,122 @@ export class CivManager {
     return s;
   }
 
-  private foundSettlement(sim: Simulation, t: Tribe, x: number, y: number, colonists: Creature[], from?: Settlement): Settlement {
-    const s: Settlement = {
-      id: this.nextSettlementId++,
-      tribeId: t.id,
-      name: settlementName(sim.rng, t.lang),
-      x, y,
-      tier: 0,
-      founded: sim.tick,
-      health: 100,
-      population: colonists.length,
-      buildings: 2,
-      walls: false,
-      farms: [],
-      destroyed: false,
-      destroyedTick: 0,
-    };
+  /** Founding requirements: land, fresh water within reach, room, no hostile claim. */
+  siteValid(sim: Simulation, t: Tribe, x: number, y: number): boolean {
+    const w = sim.world;
+    if (!w.inBounds(x, y)) return false;
+    const i = w.tileAt(x, y);
+    if (!w.isLand(i) || w.biome[i] >= 14) return false;
+    if (w.waterDist[i] > 6) return false;
+    const owner = w.territory[i];
+    if (owner >= 0 && owner !== t.id) return false;
+    for (const o of this.settlements) if (!o.destroyed && dist2d(o.x - x, o.y - y) < 8) return false;
+    if (this.nearRecentRuin(sim, t, x, y)) return false;
+    return true;
+  }
+
+  /**
+   * Whether a people may resettle an abandoned place. A people does not return to a town it abandoned
+   * itself within the last season (no abandon/resettle oscillation); land with nothing left is a fresh site.
+   */
+  canResettle(sim: Simulation, t: Tribe, s: Settlement): boolean {
+    if (!s.destroyed || s.reclaimed) return false;
+    return !(currentEra(s).tribeId === t.id && sim.tick - s.destroyedTick < TICKS_PER_SEASON);
+  }
+
+  /** True when a site sits on a place this people abandoned too recently to return to. */
+  nearRecentRuin(sim: Simulation, t: Tribe, x: number, y: number): boolean {
+    for (const s of this.settlements) {
+      if (s.destroyed && !s.reclaimed && !this.canResettle(sim, t, s) && dist2d(s.x - x, s.y - y) < 6) return true;
+    }
+    return false;
+  }
+
+  ruinNear(x: number, y: number, r: number, sim?: Simulation, t?: Tribe): Settlement | undefined {
+    let best: Settlement | undefined, bd = r;
+    for (const s of this.settlements) {
+      if (!s.destroyed || s.reclaimed) continue;
+      if (sim && t && !this.canResettle(sim, t, s)) continue;
+      const d = dist2d(s.x - x, s.y - y);
+      if (d < bd) { bd = d; best = s; }
+    }
+    return best;
+  }
+
+  /** Strategic site search: fertility, water, building material, ruins to reuse, distance. */
+  findSite(sim: Simulation, t: Tribe, cx: number, cy: number, rMin: number, rMax: number, preferRuins: boolean): { x: number; y: number; ruinId: number } | null {
+    const rng = sim.rng, w = sim.world;
+    const cands: { x: number; y: number; ruinId: number }[] = [];
+    if (preferRuins) {
+      for (const s of this.settlements) {
+        if (!this.canResettle(sim, t, s)) continue;
+        const d = dist2d(s.x - cx, s.y - cy);
+        if (d >= rMin && d <= rMax + 12) cands.push({ x: s.x, y: s.y, ruinId: s.id });
+      }
+    }
+    for (let k = 0; k < 18; k++) {
+      const a = rng.next() * Math.PI * 2, r = rng.range(rMin, rMax);
+      cands.push({ x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r, ruinId: -1 });
+    }
+    let best: { x: number; y: number; ruinId: number } | null = null, bs = 0.55;
+    for (const c of cands) {
+      if (!this.siteValid(sim, t, c.x, c.y)) continue;
+      let s = this.siteScore(sim, c.x, c.y, t.id) - dist2d(c.x - cx, c.y - cy) * 0.012;
+      const i = w.tileAt(c.x, c.y);
+      // Building material within reach.
+      let wood = 0, stone = 0;
+      for (let dy = -6; dy <= 6; dy += 3) for (let dx = -6; dx <= 6; dx += 3) {
+        if (!w.inBounds(c.x + dx, c.y + dy)) continue;
+        const b = BIOMES[w.biome[w.tileAt(c.x + dx, c.y + dy)]];
+        wood = Math.max(wood, b.wood); stone = Math.max(stone, b.stone);
+      }
+      s += wood * 0.25 + stone * 0.1 + (w.river[i] ? 0.15 : 0);
+      if (c.ruinId >= 0) { const r = this.settlementById.get(c.ruinId)!; s += 0.35 + Math.min(0.4, (r.stone + r.wood) * 0.02); }
+      if (s > bs) { bs = s; best = c; }
+    }
+    return best;
+  }
+
+  /** Found a new settlement, or resettle ruins, with the given colonists as residents. */
+  establish(sim: Simulation, t: Tribe, x: number, y: number, colonists: Creature[], parent: Settlement | null, how: 'founded' | 'colonized' | 'refuge', causeId: number, ruinId = -1): Settlement {
+    const ruin = ruinId >= 0 ? this.settlementById.get(ruinId) : this.ruinNear(x, y, 4, sim, t);
+    let s: Settlement;
+    if (ruin && this.canResettle(sim, t, ruin)) {
+      s = ruin;
+      resettle(sim, this, s, t, 'resettled', causeId);
+      if (parent) s.parentId = parent.id;
+    } else {
+      s = this.foundSettlement(sim, t, x, y, parent, how, causeId);
+    }
+    for (const c of colonists) {
+      c.homeId = s.id;
+      c.migrationId = -1;
+      c.remember(sim.tick, 'settle', parent ? `Left ${parent.name} to settle ${s.name}` : `Helped found ${s.name}`);
+    }
+    s.population = colonists.length;
+    if (t.capitalId < 0 || !this.settlement(t.capitalId)) t.capitalId = s.id;
+    if (t.government === 'Nomadic Band') t.government = 'Chiefdom';
+    return s;
+  }
+
+  foundSettlement(sim: Simulation, t: Tribe, x: number, y: number, parent: Settlement | null, how: 'founded' | 'colonized' | 'refuge', causeId: number): Settlement {
+    const s = newSettlement(this.nextSettlementId++, t, settlementName(sim.rng, t.lang), x, y, sim.tick, how, parent?.id ?? -1);
     this.settlements.push(s);
     this.settlementById.set(s.id, s);
     t.settlementIds.push(s.id);
-    for (const c of colonists) {
-      c.homeId = s.id;
-      c.remember(sim.tick, 'settle', from ? `Left ${from.name} to found ${s.name}` : `Helped found ${s.name}`);
-    }
+    this.counters.founded++;
+    if (parent) this.counters.colonies++;
     const w = sim.world;
     const i = w.tileAt(x, y);
     const by = w.river[i] > 0 || w.waterDist[i] <= 2 ? (w.lake[i] || w.biome[i] === 3 ? 'on a lakeshore' : 'by the river') : isCoastal(sim, x, y) ? 'on the coast' : `in the ${BIOMES[w.biome[i]].name.toLowerCase()}`;
     const firstEver = this.settlements.length === 1;
-    sim.events.push({
-      tick: sim.tick, cat: 'civ', level: firstEver ? 3 : from ? 1 : 2,
-      title: firstEver ? 'The first settlement' : from ? 'New colony' : 'Settlement established',
-      text: from ? `Settlers from ${from.name} founded ${s.name} ${by}.` : `${t.name} settled down and founded ${s.name} ${by}.${firstEver ? ' History has begun.' : ''}`,
-      x, y, tribeId: t.id, settlementId: s.id,
+    settlementEvent(sim, s, {
+      cat: 'settlement', level: firstEver ? 3 : 2,
+      title: firstEver ? 'The first settlement' : how === 'refuge' ? 'A refuge founded' : parent ? 'New colony' : 'Settlement established',
+      text: how === 'refuge' ? `Refugees from ${parent?.name ?? 'a fallen town'} founded ${s.name} ${by}.`
+        : parent ? `Colonists from ${parent.name} founded ${s.name} ${by}.` : `${t.name} settled down and founded ${s.name} ${by}.${firstEver ? ' History has begun.' : ''}`,
+      tribeId: t.id, causeId: causeId >= 0 ? causeId : undefined,
     });
-    if (t.government === 'Nomadic Band') t.government = 'Chiefdom';
     this.territoryDirty = true;
     return s;
   }
@@ -559,65 +783,71 @@ export class CivManager {
   private manageSettlements(sim: Simulation, t: Tribe): void {
     const rng = sim.rng;
     const w = sim.world;
-    // Nomadic bands look for a home.
+    // Nomadic bands look for a home (ruins included); the band travels with its leader.
     if (t.settlementIds.length === 0) {
       if (t.population < 4) return;
       const leader = sim.byId.get(t.leaderId);
-      if (!leader) return;
+      if (!leader || leader.migrationId >= 0) return;
       let bx = leader.x, by = leader.y, bs = this.siteScore(sim, leader.x, leader.y, t.id);
       for (let k = 0; k < 6; k++) {
         const x = leader.x + rng.range(-8, 8), y = leader.y + rng.range(-8, 8);
         const s = this.siteScore(sim, x, y, t.id);
         if (s > bs) { bs = s; bx = x; by = y; }
       }
+      const ruin = this.ruinNear(leader.x, leader.y, 10, sim, t);
+      if (ruin && this.siteValid(sim, t, ruin.x, ruin.y) && this.siteScore(sim, ruin.x, ruin.y, t.id) + 0.5 > bs) { bx = ruin.x; by = ruin.y; bs += 0.5; }
+      // Not straight back to the place they just left.
+      if (this.nearRecentRuin(sim, t, bx, by)) return;
       const waited = sim.tick - t.nomadicSince;
       if (bs > 1.25 || (waited > TICKS_PER_DAY * 3 && bs > 0.7) || (waited > TICKS_PER_DAY * 8 && bs > 0.2)) {
-        const members = sim.creatures.filter((c) => c.tribeId === t.id && c.alive);
-        this.foundSettlement(sim, t, bx, by, members);
+        const band = sim.creatures.filter((c) => c.tribeId === t.id && c.alive && c.migrationId < 0 && dist2d(c.x - leader.x, c.y - leader.y) < 30);
+        if (band.length >= 3) this.establish(sim, t, bx, by, band, null, 'founded', -1);
       }
       return;
     }
 
-    // Spoilage and storage caps.
     const pottery = t.techs.includes('pottery');
-    t.stock.food *= pottery ? 0.9985 : 0.996;
-    const cap = (40 + t.population * 14) * (pottery ? 2 : 1);
-    if (t.stock.food > cap) t.stock.food = cap;
-    for (const k of ['wood', 'stone', 'ore'] as const) if (t.stock[k] > 400) t.stock[k] = 400;
-
+    const has = (x: string) => t.techs.includes(x);
     for (const sid of t.settlementIds.slice()) {
       const s = this.settlement(sid);
       if (!s) continue;
+      // Local spoilage and storage limits.
+      s.stock.food *= pottery ? 0.9985 : 0.996;
+      const cap = (30 + s.population * 14) * (pottery ? 2 : 1);
+      if (s.stock.food > cap) s.stock.food = cap;
+      for (const k of ['wood', 'stone', 'ore'] as const) if (s.stock[k] > 300) s.stock[k] = 300;
       if (s.health < 100) s.health = Math.min(100, s.health + 0.2);
+      if (s.walls && s.wallCondition < 1) s.wallCondition = Math.min(1, s.wallCondition + 0.002);
 
       // Tier upgrades.
-      const has = (x: string) => t.techs.includes(x);
+      const pts = structurePoints(s);
       let up = false;
-      if (s.tier === 0 && (has('construction') || has('agriculture')) && s.population >= 9 && s.buildings >= 10) up = true;
-      else if (s.tier === 1 && has('masonry') && s.population >= 20 && s.buildings >= 35) up = true;
-      else if (s.tier === 2 && has('engineering') && s.population >= 35 && s.buildings >= 80) up = true;
+      if (s.tier === 0 && (has('construction') || has('agriculture')) && s.population >= 9 && pts >= 10) up = true;
+      else if (s.tier === 1 && has('masonry') && s.population >= 20 && pts >= 35) up = true;
+      else if (s.tier === 2 && has('engineering') && s.population >= 35 && pts >= 80) up = true;
       if (up) {
         s.tier++;
         const first = !this.firstTier.has(s.tier);
         this.firstTier.add(s.tier);
-        sim.events.push({
-          tick: sim.tick, cat: 'civ', level: s.tier === 3 || first ? 3 : 2,
+        settlementEvent(sim, s, {
+          cat: 'settlement', level: s.tier === 3 || first ? 3 : 2,
           title: first ? `The first ${TIER_NAMES[s.tier].toLowerCase()}` : `${s.name} grows`,
           text: `${s.name} of ${t.name} has grown into a ${TIER_NAMES[s.tier].toLowerCase()} of ${s.population}.${first ? ' Nothing like it has existed before.' : ''}`,
-          x: s.x, y: s.y, tribeId: t.id, settlementId: s.id,
+          tribeId: t.id,
         });
         if (t.traditions.length < 4) this.addTradition(sim, t);
         this.territoryDirty = true;
       }
-      if (!s.walls && has('masonry') && s.tier >= 1 && t.stock.stone >= 40) {
-        t.stock.stone -= 40;
+      if (!s.walls && has('masonry') && s.tier >= 1 && s.stock.stone >= 40) {
+        s.stock.stone -= 40;
         s.walls = true;
-        sim.events.push({ tick: sim.tick, cat: 'civ', level: 1, title: 'Walls raised', text: `${s.name} raised stone walls.`, x: s.x, y: s.y, tribeId: t.id, settlementId: s.id });
+        s.wallCondition = 1;
+        settlementEvent(sim, s, { cat: 'settlement', level: 1, title: 'Walls raised', text: `${s.name} raised stone walls.`, tribeId: t.id });
       }
 
       // Farms.
       if (has('agriculture')) {
-        const want = 4 + s.tier * 6 + (pottery ? 2 : 0);
+        const want = 4 + s.tier * 6 + (pottery ? 2 : 0) + (pol(t, 'agriculture') > 0 ? 3 : 0);
         s.farms = s.farms.filter((f) => w.farm[f] === 1);
         for (let k = 0; k < 6 && s.farms.length < want; k++) {
           const a = rng.next() * Math.PI * 2, r = rng.range(1.5, 3.5 + s.tier);
@@ -629,22 +859,6 @@ export class CivManager {
             if (w.fertility[i] < 0.5) w.fertility[i] = 0.5; // irrigation
             s.farms.push(i);
           }
-        }
-      }
-
-      // Expansion: overcrowded settlements send out colonists.
-      if (s.population > CAPACITY[s.tier] * 0.85 && t.population >= 22 && t.settlementIds.length < Math.min(1 + Math.floor(t.population / 28), 2 + Math.floor(t.techs.length / 3)) && rng.chance(0.15)) {
-        let bx = 0, by = 0, bs = 0.6;
-        for (let k = 0; k < 14; k++) {
-          const a = rng.next() * Math.PI * 2, r = rng.range(12, 26);
-          const x = s.x + Math.cos(a) * r, y = s.y + Math.sin(a) * r;
-          const sc = this.siteScore(sim, x, y, t.id);
-          if (sc > bs) { bs = sc; bx = x; by = y; }
-        }
-        if (bs > 0.6) {
-          const residents = sim.creatures.filter((c) => c.homeId === s.id && c.alive);
-          const colonists = residents.filter((_, i) => i % 3 === 0);
-          if (colonists.length >= 6) this.foundSettlement(sim, t, bx, by, colonists, s);
         }
       }
     }
@@ -667,9 +881,13 @@ export class CivManager {
         }
         const same = a.speciesId === b.speciesId;
         const pressure = d < 40 ? (1 - d / 40) : 0;
-        const scarcity = (sc(a) + sc(b)) / 2;
+        const scarcity = (scarce(this, a) + scarce(this, b)) / 2;
         let target = (a.culture.openness + b.culture.openness) * 25 - (a.culture.militarism + b.culture.militarism) * 30 +
           (same ? 10 : -12) - pressure * scarcity * 45 + (r.traded ? 15 : 0);
+        target += 15 * (goalW(a, 'alliance') + goalW(b, 'alliance')) / 2 - 15 * (goalW(a, 'conquest') + goalW(b, 'conquest')) / 2 +
+          8 * (pol(a, 'diplomacy') + pol(b, 'diplomacy')) / 2 - 6 * (pol(a, 'military') + pol(b, 'military')) / 2;
+        // Shared ancestry tempers hostility once the bitterness of secession fades.
+        if (a.parentTribeId === b.id || b.parentTribeId === a.id) target += 8;
         if (r.status === 'war') target += Math.min(40, (sim.tick - r.since) / (TICKS_PER_DAY * 2)); // war weariness
         const shared = this.enemiesOf(a.id).filter((e) => this.enemiesOf(b.id).includes(e)).length;
         target += shared * 25;
@@ -677,15 +895,17 @@ export class CivManager {
         r.value = Math.max(-100, Math.min(100, r.value));
 
         const mil = Math.max(a.culture.militarism, b.culture.militarism);
-        if (r.status !== 'war' && r.value < -40 && mil > 0.45) {
+        const warAt = -40 + 12 * Math.max(goalW(a, 'conquest'), goalW(b, 'conquest'));
+        if (r.status !== 'war' && r.value < warAt && mil > 0.45) {
           r.status = 'war'; r.since = sim.tick;
           const agg = a.culture.militarism >= b.culture.militarism ? a : b;
           const def = agg === a ? b : a;
           agg.culture.militarism = Math.min(1, agg.culture.militarism + 0.05);
-          sim.events.push({ tick: sim.tick, cat: 'war', level: 3, title: 'War declared', text: `${agg.name} declared war on ${def.name}${pressure > 0.3 ? ' over contested land' : ''}.`, x: (a.homeX + b.homeX) / 2, y: (a.homeY + b.homeY) / 2, tribeId: agg.id });
+          const ev = sim.events.push({ tick: sim.tick, cat: 'war', level: 3, title: 'War declared', text: `${agg.name} declared war on ${def.name}${pressure > 0.3 ? ' over contested land' : ''}${scarcity > 0.5 ? ', driven by hunger' : ''}.`, x: (a.homeX + b.homeX) / 2, y: (a.homeY + b.homeY) / 2, tribeId: agg.id });
+          r.causeId = ev.id;
         } else if (r.status === 'war' && r.value > -12) {
           r.status = 'peace'; r.since = sim.tick;
-          sim.events.push({ tick: sim.tick, cat: 'war', level: 2, title: 'Peace treaty', text: `${a.name} and ${b.name} have made peace.`, x: (a.homeX + b.homeX) / 2, y: (a.homeY + b.homeY) / 2, tribeId: a.id });
+          sim.events.push({ tick: sim.tick, cat: 'war', level: 2, title: 'Peace treaty', text: `${a.name} and ${b.name} have made peace.`, x: (a.homeX + b.homeX) / 2, y: (a.homeY + b.homeY) / 2, tribeId: a.id, causeId: r.causeId });
         } else if (r.status === 'peace' && r.value > 45 && Math.min(a.culture.openness, b.culture.openness) > 0.35) {
           r.status = 'alliance'; r.since = sim.tick;
           sim.events.push({ tick: sim.tick, cat: 'civ', level: 2, title: 'Alliance formed', text: `${a.name} and ${b.name} have formed an alliance.`, x: (a.homeX + b.homeX) / 2, y: (a.homeY + b.homeY) / 2, tribeId: a.id });
@@ -695,23 +915,44 @@ export class CivManager {
         }
       }
     }
-    function sc(t: Tribe): number {
-      return t.population > 0 ? Math.max(0, 1 - t.stock.food / (t.population * 8)) : 0;
+    function scarce(m: CivManager, t: Tribe): number {
+      return t.population > 0 ? Math.max(0, 1 - m.foodOf(t) / (t.population * 8)) : 0;
     }
   }
 
+  /** Total food in a tribe's settlements. */
+  foodOf(t: Tribe): number {
+    let f = 0;
+    for (const sid of t.settlementIds) { const s = this.settlement(sid); if (s) f += s.stock.food; }
+    return f;
+  }
+
+  stockOf(t: Tribe): Stock {
+    const st: Stock = { food: 0, wood: 0, stone: 0, ore: 0 };
+    for (const sid of t.settlementIds) {
+      const s = this.settlement(sid);
+      if (!s) continue;
+      st.food += s.stock.food; st.wood += s.stock.wood; st.stone += s.stock.stone; st.ore += s.stock.ore;
+    }
+    return st;
+  }
+
+  /** Territory from settlement influence: population, tier, walls and technology; abandoned claims fade. */
   computeTerritory(sim: Simulation): void {
     this.territoryDirty = false;
     const w = sim.world;
     const terr = w.territory;
+    const before = terr.slice();
     terr.fill(-1);
     const inf = new Float32Array(w.size);
     for (const t of this.tribes) t.territory = 0;
     for (const s of this.settlements) {
-      if (s.destroyed) continue;
       const t = this.tribeById.get(s.tribeId);
       if (!t || t.collapsed) continue;
-      const R = 5 + s.tier * 4 + Math.min(6, t.techs.length * 0.4) + Math.min(4, s.population / 10);
+      const claim = residualClaim(sim, s);
+      if (claim <= 0) continue;
+      const pop = s.destroyed ? s.peak * 0.3 : s.population;
+      const R = (4 + s.tier * 3.5 + Math.min(6, t.techs.length * 0.4) + Math.min(5, Math.sqrt(pop)) + (s.walls ? 1.5 : 0)) * (0.5 + 0.5 * claim);
       const x0 = Math.max(0, Math.floor(s.x - R)), x1 = Math.min(w.width - 1, Math.ceil(s.x + R));
       const y0 = Math.max(0, Math.floor(s.y - R)), y1 = Math.min(w.height - 1, Math.ceil(s.y + R));
       for (let y = y0; y <= y1; y++) {
@@ -720,12 +961,33 @@ export class CivManager {
           if (!w.isLand(i)) continue;
           const d = dist2d(x + 0.5 - s.x, y + 0.5 - s.y);
           if (d > R) continue;
-          const v = (s.tier + 1) * (1 - d / R) + 0.01;
+          const v = ((s.tier + 1) * (1 - d / R) + 0.01) * claim;
           if (v > inf[i]) { inf[i] = v; terr[i] = t.id; }
         }
       }
     }
-    for (let i = 0; i < w.size; i++) if (terr[i] >= 0) { const t = this.tribeById.get(terr[i]); if (t) t.territory++; }
+    const transfers = new Map<string, number>();
+    for (let i = 0; i < w.size; i++) {
+      const o = terr[i];
+      if (o >= 0) { const t = this.tribeById.get(o); if (t) t.territory++; }
+      const b = before[i];
+      if (b >= 0 && o >= 0 && b !== o) { const k = `${b}>${o}`; transfers.set(k, (transfers.get(k) ?? 0) + 1); }
+    }
+    for (const [k, n] of transfers) {
+      if (n < 40) continue;
+      const [from, to] = k.split('>').map(Number);
+      const last = this.borderReported.get(k) ?? -1e9;
+      if (sim.tick - last < TICKS_PER_DAY * 15) continue;
+      this.borderReported.set(k, sim.tick);
+      const a = this.tribeById.get(from), b = this.tribeById.get(to);
+      if (!a || !b) continue;
+      this.counters.borderShifts++;
+      this.tribeEvent(sim, b, {
+        cat: 'civ', level: 1, title: 'Borders shift',
+        text: `${b.name} extended its reach over ${n} leagues of land once held by ${a.name}.`,
+        causeId: this.lastLossEvent.get(a.id),
+      });
+    }
   }
 
   // ---------------------------------------------------------------- Jobs
@@ -750,31 +1012,40 @@ export class CivManager {
       c.job = 'scout';
       return true;
     }
-    // Keep doing the current job for a while.
-    if (c.job && c.actionTicks < 500 && c.action === 'work' && c.carry > 0) return true;
+    // Keep doing the current job until it is done: carrying goods home, or a build/guard/tending shift in progress.
+    if (c.job && c.action === 'work') {
+      if (c.carry > 0 && c.actionTicks < 500) return true;
+      const shift = c.job === 'build' ? 150 : c.job === 'guard' ? 90 : c.job === 'farm' ? 160 : c.job === 'raid' || c.job === 'trade' ? 400 : 0;
+      if (c.actionTicks < shift) return true;
+    }
 
     const has = (x: string) => t.techs.includes(x);
-    const needFood = Math.max(0, Math.min(1, 1 - t.stock.food / Math.max(1, t.population * 12)));
+    const needFood = clamp(1 - s.stock.food / Math.max(1, s.population * 12), 0, 1);
     const enemies = this.enemiesOf(t.id);
     const allies = this.alliesOf(t.id);
-    const canBuild = t.stock.wood >= 3;
+    // Treeless land (grassland, desert, tundra) builds with sod, mud brick and fieldstone instead of timber.
+    const earthen = s.stock.wood < 3 && s.stock.stone < 3 && s.econ.crowding > 0.7 && localTimber(sim, s) < 0.2;
+    const canBuild = s.stock.wood >= 3 || s.stock.stone >= 3 || earthen;
+    const fs = 1 + 0.6 * goalW(t, 'food_security') + 0.3 * pol(t, 'agriculture');
+    const build = 1 + 0.4 * goalW(t, 'grow') + 0.4 * goalW(t, 'recover') + 0.3 * goalW(t, 'expand');
+    const gather = 1 + 0.3 * goalW(t, 'expand') + 0.2 * goalW(t, 'grow');
     const weights: [Job, number][] = [
-      ['forage', 1 + needFood * 3],
-      ['hunt', c.strength > 0.5 ? 0.25 + needFood * 1.2 + t.culture.militarism * 0.4 + (has('hunting') ? 0.8 : 0) : 0],
-      ['farm', has('agriculture') && s.farms.length > 0 ? 1.4 + needFood * 2 + t.culture.agrarian : 0],
-      ['woodcut', 0.5 + (t.stock.wood < 30 ? 1 : 0.15)],
-      ['mine', has('construction') || has('masonry') ? 0.4 + (t.stock.stone < 40 ? 0.7 : 0.1) + (has('bronze') ? 0.3 : 0) : 0],
-      ['build', canBuild ? 0.8 + (s.buildings < [12, 40, 90, 200][s.tier] ? 1 : 0.2) : 0],
-      ['guard', 0.15 + t.culture.militarism * 0.5 + (enemies.length ? 1.2 : 0)],
-      ['raid', enemies.length && c.strength > 0.6 && c.health > c.maxHealth * 0.6 ? 0.6 + t.culture.militarism * 2.5 : 0],
-      ['trade', has('trade') && allies.length ? 0.3 + t.culture.openness * 1.2 : 0],
-      ['scout', 0.1 + c.curiosity * 0.3],
+      ['forage', (1 + needFood * 3) * fs],
+      ['hunt', c.strength > 0.5 ? (0.25 + needFood * 1.2 + t.culture.militarism * 0.4 + (has('hunting') ? 0.8 : 0)) * fs * (1 - 0.5 * Math.max(0, pol(t, 'conservation'))) : 0],
+      ['farm', has('agriculture') && s.farms.length > 0 ? (1.4 + needFood * 2 + t.culture.agrarian) * fs : 0],
+      ['woodcut', (0.5 + (s.stock.wood < 30 ? 1 : 0.15)) * gather],
+      ['mine', has('construction') || has('masonry') ? (0.4 + (s.stock.stone < 40 ? 0.7 : 0.1) + (has('bronze') ? 0.3 : 0)) * gather : 0],
+      ['build', canBuild ? (0.8 + (structurePoints(s) < [12, 40, 90, 200][s.tier] || s.econ.crowding > 0.85 ? 1 : 0.2)) * build : 0],
+      ['guard', (0.15 + t.culture.militarism * 0.5 + (enemies.length ? 1.2 : 0)) * (1 + 0.8 * goalW(t, 'defend') + 0.3 * pol(t, 'military'))],
+      ['raid', enemies.length && c.strength > 0.6 && c.health > c.maxHealth * 0.6 ? Math.max(0, (0.6 + t.culture.militarism * 2.5) * (1 + 0.8 * goalW(t, 'conquest') + 0.4 * pol(t, 'military') - 0.5 * goalW(t, 'recover'))) : 0],
+      ['trade', has('trade') && allies.length ? (0.3 + t.culture.openness * 1.2) * (1 + goalW(t, 'trade') + 0.6 * pol(t, 'trade')) : 0],
+      ['scout', (0.1 + c.curiosity * 0.3) * (1 + 0.5 * goalW(t, 'expand'))],
     ];
     let total = 0;
-    for (const [, wv] of weights) total += wv;
+    for (const [, wv] of weights) total += Math.max(0, wv);
     let r = rng.next() * total;
     let job: Job = 'forage';
-    for (const [j, wv] of weights) { r -= wv; if (r <= 0) { job = j; break; } }
+    for (const [j, wv] of weights) { r -= Math.max(0, wv); if (r <= 0) { job = j; break; } }
     c.job = job;
     c.actionTicks = 0;
     return this.assignJobTarget(sim, c, t, s, job, enemies, allies);
@@ -796,9 +1067,10 @@ export class CivManager {
       return bx >= 0 ? { x: bx, y: by } : null;
     };
     let p: { x: number; y: number } | null = null;
+    const vegMin = 2 + Math.max(0, pol(t, 'conservation')) * 1.5;
     switch (job) {
       case 'forage':
-        p = sample(12, (i) => (w.veg[i] > 2 ? w.veg[i] : 0));
+        p = sample(12, (i) => (w.veg[i] > vegMin ? w.veg[i] : 0));
         c.goal = `Foraging for ${s.name}`;
         break;
       case 'hunt': {
@@ -818,7 +1090,7 @@ export class CivManager {
           c.goal = `Hunting ${prey.name} for ${s.name}`;
           return true;
         }
-        p = sample(14, (i) => (w.veg[i] > 2 ? w.veg[i] : 0));
+        p = sample(14, (i) => (w.veg[i] > vegMin ? w.veg[i] : 0));
         c.job = 'forage';
         c.goal = `Foraging for ${s.name} (no game nearby)`;
         break;
@@ -918,7 +1190,9 @@ export class CivManager {
     if (c.carry > 0 && (c.carry >= capacity || c.targetId === -9)) {
       if (moveToward(sim, c, s.x, s.y) < 1.5) {
         const k = c.carryKind ?? 'food';
-        t.stock[k] += c.carry * (k === 'food' && t.traditions.includes('Harvest Festival') ? 1.1 : 1);
+        const amount = c.carry * (k === 'food' && t.traditions.includes('Harvest Festival') ? 1.1 : 1);
+        s.stock[k] += amount;
+        if (k === 'food') { if (job === 'trade') s.importAcc += amount; else s.prodAcc += amount; }
         c.carry = 0;
         c.carryKind = null;
         c.targetId = -1;
@@ -936,7 +1210,8 @@ export class CivManager {
             if (c.actionTicks > 160) c.decideIn = 0;
             return;
           }
-          const take = Math.min(Math.max(0, w.veg[i] - 0.4), 0.5 * c.effSize * tools * (job === 'farm' ? 1.4 : 1));
+          const reserve = 0.4 + Math.max(0, pol(t, 'conservation')) * 1.2;
+          const take = Math.min(Math.max(0, w.veg[i] - reserve), 0.5 * c.effSize * tools * (job === 'farm' ? 1.4 : 1));
           if (take < 0.05) {
             if (c.carry > 0) c.targetId = -9; else c.decideIn = 0;
             return;
@@ -970,11 +1245,16 @@ export class CivManager {
       case 'build': {
         if (moveToward(sim, c, c.tx, c.ty) < 1) {
           if (c.actionTicks % 25 === 0) {
-            if (t.stock.wood >= 3) {
-              t.stock.wood -= 3;
-              let gain = t.techs.includes('construction') ? 1.5 : 1;
-              if (t.techs.includes('masonry') && t.stock.stone >= 2) { t.stock.stone -= 2; gain += 1; }
-              s.buildings += gain;
+            if (s.stock.wood >= 3) {
+              s.stock.wood -= 3;
+              s.wood += t.techs.includes('construction') ? 1.5 : 1;
+              if (t.techs.includes('masonry') && s.stock.stone >= 2) { s.stock.stone -= 2; s.stone += 1; }
+            } else if (s.stock.stone >= 3) {
+              s.stock.stone -= 3;
+              s.stone += t.techs.includes('masonry') ? 1 : 0.6;
+            } else if (s.econ.crowding > 0.7 && localTimber(sim, s) < 0.2) {
+              // Sod, mud and thatch: slow to raise and perishable like timber.
+              s.wood += t.techs.includes('construction') ? 0.45 : 0.3;
             } else c.decideIn = 0;
           }
           if (c.actionTicks > 150) c.decideIn = 0;
@@ -1005,8 +1285,11 @@ export class CivManager {
           }
           if (d < 2 && c.attackCd === 0) {
             c.attackCd = 10;
-            es.health -= c.strength * 2.2 * this.combatBonus(c) / (es.walls ? 2 : 1);
-            if (es.health <= 0) this.sack(sim, es, t);
+            es.health -= c.strength * 2.2 * this.combatBonus(c) / (es.walls && es.wallCondition > 0.3 ? 2 : 1);
+            es.threat += 0.02;
+            const r = this.rel(t.id, es.tribeId);
+            if (r?.causeId !== undefined) es.lastCause = r.causeId;
+            if (es.health <= 0) this.sack(sim, es, t, c);
           }
         }
         if (c.actionTicks > 700) c.decideIn = 0;
@@ -1022,10 +1305,11 @@ export class CivManager {
             r.value = Math.min(100, r.value + 4);
             if (!r.traded) {
               r.traded = true;
-              sim.events.push({ tick: sim.tick, cat: 'civ', level: 2, title: 'Trade route', text: `A caravan from ${t.name} reached ${as.name}. A trade route now links ${t.name} and ${other.name}.`, x: as.x, y: as.y, tribeId: t.id, settlementId: as.id });
+              settlementEvent(sim, as, { cat: 'civ', level: 2, title: 'Trade route', text: `A caravan from ${t.name} reached ${as.name}. A trade route now links ${t.name} and ${other.name}.`, tribeId: t.id });
             }
             // Trade creates wealth on both sides.
-            other.stock.food += 3; other.stock.wood += 1;
+            as.stock.food += 3; as.stock.wood += 1;
+            as.importAcc += 3;
             c.carry = 4; c.carryKind = 'food';
             t.culture.openness = Math.min(1, t.culture.openness + 0.002);
           }
@@ -1036,45 +1320,52 @@ export class CivManager {
     }
   }
 
-  private sack(sim: Simulation, s: Settlement, by: Tribe): void {
+  /** A settlement falls to raiders: loot, refugees, and an inspectable ruin left behind. */
+  sack(sim: Simulation, s: Settlement, by: Tribe, raider: Creature | null): void {
     const victim = this.tribeById.get(s.tribeId);
-    this.ruin(sim, s);
-    if (victim) {
-      const share = 1 / Math.max(1, victim.settlementIds.length);
-      for (const k of ['food', 'wood', 'stone', 'ore'] as const) {
-        const loot = victim.stock[k] * share * 0.6;
-        victim.stock[k] -= loot;
-        by.stock[k] += loot;
-      }
-      victim.settlementIds = victim.settlementIds.filter((id) => id !== s.id);
-      if (victim.settlementIds.length === 0) victim.nomadicSince = sim.tick;
-      for (const c of sim.creatures) if (c.homeId === s.id) {
-        c.homeId = -1;
-        c.remember(sim.tick, 'loss', `Lost home when ${s.name} fell to ${by.name}`);
-      }
+    const home = raider && raider.homeId >= 0 ? this.settlement(raider.homeId) : this.settlement(by.capitalId);
+    for (const k of ['food', 'wood', 'stone', 'ore'] as const) {
+      const loot = s.stock[k] * 0.6;
+      s.stock[k] -= loot;
+      if (home) home.stock[k] += loot;
     }
-    sim.events.push({ tick: sim.tick, cat: 'war', level: 3, title: 'Settlement destroyed', text: `${s.name}${victim ? ` of ${victim.name}` : ''} was sacked and burned by ${by.name}.`, x: s.x, y: s.y, tribeId: by.id, settlementId: s.id });
+    const residents = sim.creatures.filter((c) => c.alive && c.homeId === s.id);
+    for (const c of residents) c.remember(sim.tick, 'loss', `Lost home when ${s.name} fell to ${by.name}`);
+    const r = victim ? this.rel(by.id, victim.id) : undefined;
+    const ev = settlementEvent(sim, s, {
+      cat: 'war', level: 3, title: 'Settlement destroyed', text: `${s.name}${victim ? ` of ${victim.name}` : ''} was sacked and burned by ${by.name}.`,
+      tribeId: by.id, causeId: r?.causeId,
+    });
+    s.wood *= 0.4;
+    s.wallCondition *= 0.5;
+    s.health = 0;
+    if (victim) { victim.recentLossTick = sim.tick; this.lastLossEvent.set(victim.id, ev.id); }
+    makeRefugees(sim, this, s, residents, ev.id, `the fall of ${s.name}`);
+    abandon(sim, this, s, `sacked by ${by.name}`, ev.id, 'war', false);
     sim.fx.push({ kind: 'fire', x: s.x, y: s.y, r: 4, tick: sim.tick });
   }
 
   /** Damage settlements in radius (disasters). Returns destroyed count. */
-  damageArea(sim: Simulation, x: number, y: number, radius: number, amount: number, cause: string): number {
+  damageArea(sim: Simulation, x: number, y: number, radius: number, amount: number, cause: string, causeId = -1): number {
     let destroyed = 0;
     for (const s of this.settlements) {
       if (s.destroyed) continue;
       const d = dist2d(s.x - x, s.y - y);
       if (d > radius) continue;
-      s.health -= amount * (1 - d / radius) / (s.walls ? 1.3 : 1);
-      s.buildings = Math.max(0, s.buildings * (1 - 0.3 * (1 - d / radius)));
+      const f = 1 - d / radius;
+      s.health -= amount * f / (s.walls ? 1.3 : 1);
+      s.wood *= 1 - 0.35 * f;
+      s.stone *= 1 - 0.15 * f;
+      s.threat += 0.3 * f;
+      if (causeId >= 0) s.lastCause = causeId;
       if (s.health <= 0) {
         const t = this.tribeById.get(s.tribeId);
-        this.ruin(sim, s);
-        if (t) {
-          t.settlementIds = t.settlementIds.filter((id) => id !== s.id);
-          if (t.settlementIds.length === 0) t.nomadicSince = sim.tick;
-        }
+        const residents = sim.creatures.filter((c) => c.alive && c.homeId === s.id);
+        const ev = settlementEvent(sim, s, { cat: 'disaster', level: 3, title: 'Settlement lost', text: `${s.name}${t ? ` of ${t.name}` : ''} was destroyed by ${cause}.`, tribeId: s.tribeId, causeId: causeId >= 0 ? causeId : undefined });
+        if (t) { t.recentLossTick = sim.tick; this.lastLossEvent.set(t.id, ev.id); }
+        makeRefugees(sim, this, s, residents, ev.id, cause);
+        abandon(sim, this, s, `destroyed by ${cause}`, ev.id, 'disaster', false);
         destroyed++;
-        sim.events.push({ tick: sim.tick, cat: 'disaster', level: 3, title: 'Settlement lost', text: `${s.name}${t ? ` of ${t.name}` : ''} was destroyed by ${cause}.`, x: s.x, y: s.y, tribeId: s.tribeId, settlementId: s.id });
       }
     }
     return destroyed;
@@ -1092,35 +1383,73 @@ export class CivManager {
       rels.push({ tribeId: other, value: Math.round(r.value), status: r.status });
     }
     const def = t.current ? TECH_BY_ID.get(t.current) : undefined;
+    const st = this.stockOf(t);
+    let inTransit = 0;
+    for (const g of this.groups) if (g.tribeId === t.id) inTransit += g.members.length;
     return {
       id: t.id, name: t.name, speciesId: t.speciesId, color: `hsl(${Math.round(t.hue * 360)}, 70%, 60%)`, hue: t.hue,
       founded: t.founded, population: t.population, peak: t.peak, settlements: t.settlementIds.length, territory: t.territory,
       techs: t.techs.slice(), researching: t.current, researchProgress: def ? Math.min(1, t.research / def.cost) : 0,
-      stock: { food: Math.round(t.stock.food), wood: Math.round(t.stock.wood), stone: Math.round(t.stock.stone), ore: Math.round(t.stock.ore) },
+      stock: { food: Math.round(st.food), wood: Math.round(st.wood), stone: Math.round(st.stone), ore: Math.round(st.ore) },
       culture: { ...t.culture }, archetype: t.archetype, government: t.government, traditions: t.traditions.slice(),
       leaderId: t.leaderId, leaderName: t.leaderName, collapsed: t.collapsed, collapsedTick: t.collapsedTick,
       relations: rels, homeX: t.homeX, homeY: t.homeY, history: t.history.slice(),
+      capitalId: t.capitalId, capitalName: this.settlementById.get(t.capitalId)?.name ?? '—',
+      stability: t.stability, instability: t.instability, goals: t.goals.slice(), policies: { ...t.policies },
+      pendingPolicies: t.pendingPolicies.map((p) => ({ ...p })), policyHistory: t.policyHistory.slice(-8),
+      foodSecurity: t.foodSecurity, military: t.military, migIn: t.migIn, migOut: t.migOut, inTransit,
+      parentTribeId: t.parentTribeId, successors: t.successors.slice(), economy: t.economy,
+      settlementIds: t.settlementIds.slice(), recentEvents: t.events.slice(-12),
     };
   }
 
   settlementView(s: Settlement): SettlementView {
+    return settlementView(this, s);
+  }
+
+  settlementDetail(sim: Simulation, id: number): SettlementDetail | null {
+    const s = this.settlementById.get(id);
+    if (!s) return null;
     const t = this.tribeById.get(s.tribeId);
+    const hist = s.popHistory;
+    const prev = hist.length > 1 ? hist[Math.max(0, hist.length - 2)] : s.population;
+    const parent = s.parentId >= 0 ? this.settlementById.get(s.parentId) : undefined;
+    const evs: SimEvent[] = [];
+    const byId = new Map(sim.events.events.map((e) => [e.id, e]));
+    for (const eid of s.events.slice().reverse()) { const e = byId.get(eid); if (e) evs.push(e); }
+    const groups = this.groups.filter((g) => g.originId === s.id || g.destId === s.id).map((g) => groupView(sim, this, g));
     return {
-      id: s.id, tribeId: s.tribeId, name: s.name, x: s.x, y: s.y, tier: s.tier, health: s.health, population: s.population,
-      hue: t?.hue ?? 0, founded: s.founded, destroyed: s.destroyed, walls: s.walls, farms: s.farms.length,
+      id: s.id, name: s.name, tribeId: s.tribeId, tribeName: t?.name ?? '—', tribeHue: t?.hue ?? 0, state: s.state, stateSince: s.stateSince,
+      tier: s.tier, tierName: TIER_NAMES[s.tier], x: s.x, y: s.y, population: s.population, populationChange: s.population - prev,
+      housing: Math.round(housingOf(s)), peak: s.peak, founded: s.founded, abandonedTick: s.destroyed ? s.destroyedTick : null,
+      foodProd: s.econ.foodProd, foodCons: s.econ.foodCons, imports: s.econ.imports, reserveDays: s.econ.reserveDays, nourishment: s.econ.nourishment,
+      stock: { food: Math.round(s.stock.food), wood: Math.round(s.stock.wood), stone: Math.round(s.stock.stone), ore: Math.round(s.stock.ore) },
+      jobs: s.econ.jobs, employment: s.econ.employment, water: s.econ.water, security: s.econ.security, disease: s.econ.disease,
+      crowding: s.econ.crowding, prosperity: s.econ.prosperity, pressure: s.econ.pressure, mainProblem: s.econ.mainProblem,
+      economy: s.destroyed ? STATE_LABEL[s.state] : s.econ.prosperity > 0.35 ? 'Prosperous' : s.econ.prosperity > 0.05 ? 'Comfortable' : s.econ.prosperity > -0.25 ? 'Strained' : 'Failing',
+      migIn: s.migIn, migOut: s.migOut, reserved: s.reserved, groups,
+      structures: { wood: Math.round(s.wood * 10) / 10, stone: Math.round(s.stone * 10) / 10, walls: s.walls, wallCondition: s.wallCondition, farms: s.destroyed ? s.oldFarms.length : s.farms.length, farmCondition: s.destroyed ? s.farmCondition : 1, health: s.health },
+      isCapital: !!t && t.capitalId === s.id && !s.destroyed, parentName: parent?.name ?? null,
+      eras: s.eras.map((e) => ({ ...e })), popHistory: hist.slice(-160), events: evs.slice(0, 16),
     };
   }
 
   serialize() {
     return {
       tribes: this.tribes.map((t) => JSON.parse(JSON.stringify(t))),
-      settlements: this.settlements.map((s) => ({ ...s, farms: s.farms.slice() })),
+      settlements: this.settlements.map((s) => JSON.parse(JSON.stringify(s))),
       relations: [...this.relations.values()].map((r) => ({ ...r })),
+      groups: this.groups.map((g) => JSON.parse(JSON.stringify(g))),
       nextTribeId: this.nextTribeId,
       nextSettlementId: this.nextSettlementId,
+      nextGroupId: this.nextGroupId,
       pass: this.pass,
       firstTech: [...this.firstTech],
       firstTier: [...this.firstTier],
+      counters: { ...this.counters },
+      lastLossEvent: [...this.lastLossEvent.entries()],
+      borderReported: [...this.borderReported.entries()],
+      territoryDirty: this.territoryDirty,
     };
   }
 
@@ -1128,17 +1457,38 @@ export class CivManager {
     const m = new CivManager();
     m.tribes = d.tribes;
     m.settlements = d.settlements;
+    m.groups = d.groups ?? [];
     for (const t of m.tribes) m.tribeById.set(t.id, t);
     for (const s of m.settlements) m.settlementById.set(s.id, s);
+    for (const g of m.groups) m.groupById.set(g.id, g);
     for (const r of d.relations) m.relations.set(m.key(r.a, r.b), r as DiploRel);
     m.nextTribeId = d.nextTribeId;
     m.nextSettlementId = d.nextSettlementId;
+    m.nextGroupId = d.nextGroupId ?? 1;
     m.pass = d.pass;
     m.firstTech = new Set(d.firstTech);
     m.firstTier = new Set(d.firstTier);
-    m.territoryDirty = true;
+    m.counters = { ...emptyCounters(), ...(d.counters ?? {}) };
+    m.lastLossEvent = new Map(d.lastLossEvent ?? []);
+    m.borderReported = new Map(d.borderReported ?? []);
+    // Territory is saved with the world, so only recompute it if the save says it was stale (older saves: recompute).
+    m.territoryDirty = d.territoryDirty ?? true;
     return m;
   }
+}
+
+/** Mean timber availability around a settlement (fixed sample pattern, no randomness). */
+function localTimber(sim: Simulation, s: Settlement): number {
+  const w = sim.world;
+  let sum = 0, n = 0;
+  for (let dy = -12; dy <= 12; dy += 6) {
+    for (let dx = -12; dx <= 12; dx += 6) {
+      if (!w.inBounds(s.x + dx, s.y + dy)) continue;
+      sum += BIOMES[w.biome[w.tileAt(s.x + dx, s.y + dy)]].wood;
+      n++;
+    }
+  }
+  return n ? sum / n : 0;
 }
 
 export function archetypeOf(c: Culture): string {
@@ -1167,4 +1517,4 @@ function aOrAn(s: string): string {
 }
 
 export const TIER_LABELS = TIER_NAMES;
-export { CIV_INTERVAL, genomeToRecord };
+export { CIV_INTERVAL, genomeToRecord, GOAL_LABEL, CAPACITY, PASSES_PER_DAY, currentEra };

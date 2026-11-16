@@ -68,6 +68,9 @@ export class Creature {
   children: number[] = [];
   tribeId = -1;
   homeId = -1;
+  /** Migration group this creature travels with (-1 = none). While travelling, homeId is -1. */
+  migrationId = -1;
+  lastMigrated = -1e9;
 
   birthTick = 0;
   birthX = 0;

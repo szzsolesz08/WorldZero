@@ -1,6 +1,7 @@
 import type { SimClient } from '../client/simClient';
 import type { FramePayload, LayersPayload, TerrainPayload } from '../worker/protocol';
-import type { SettlementView, WeatherView } from '../engine/types';
+import type { MigrationGroupView, SettlementView, WeatherView } from '../engine/types';
+import type { Lens } from '../client/store';
 import type { Fx } from '../engine/simulation';
 import { FRAME_STRIDE, FLAG } from '../engine/frame';
 import { Camera } from './camera';
@@ -21,9 +22,32 @@ interface ActiveFx extends Fx {
 
 interface Particle { x: number; y: number; vx: number; vy: number; life: number; max: number; kind: 0 | 1 | 2 }
 
-export interface Overlays { territory: boolean; vegetation: boolean; weather: boolean; labels: boolean }
+export interface Overlays { territory: boolean; vegetation: boolean; weather: boolean; labels: boolean; migration: boolean }
 
-export interface PickResult { kind: 'creature' | 'settlement' | 'none'; id: number; tribeId?: number }
+export interface PickResult { kind: 'creature' | 'settlement' | 'group' | 'none'; id: number; tribeId?: number; settlementId?: number }
+
+/** Colours for map lenses and migration (status colours carry status only; see DESIGN.md). */
+export const STATE_COLOR: Record<string, string> = {
+  thriving: '#4cc38a', growing: '#4cc38a', stable: '#a9b8c6', founded: '#a9b8c6', declining: '#f0b35a', crisis: '#ef6b5f',
+  abandoned: '#7d90a3', ruins: '#7d90a3',
+};
+export const KIND_COLOR = { refugee: '#ef6b5f', colonist: '#f0b35a' } as const;
+
+/** Diverging blue (thriving) to orange (failing) through a neutral grey: CVD-safe. */
+export function prosperityColor(p: number): string {
+  const t = Math.max(-1, Math.min(1, p));
+  const mix = (a: number[], b: number[], k: number) => a.map((v, i) => Math.round(v + (b[i] - v) * k));
+  const grey = [138, 150, 163], pos = [57, 135, 229], neg = [217, 89, 38];
+  const c = t >= 0 ? mix(grey, pos, t) : mix(grey, neg, -t);
+  return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+
+/** Sequential teal-green: well fed is bright, hungry is dim. */
+export function foodColor(n: number): string {
+  const k = Math.max(0, Math.min(1, (n - 0.3) / 0.6));
+  const a = [44, 66, 62], b = [118, 230, 170];
+  return `rgb(${Math.round(a[0] + (b[0] - a[0]) * k)},${Math.round(a[1] + (b[1] - a[1]) * k)},${Math.round(a[2] + (b[2] - a[2]) * k)})`;
+}
 
 function h32(n: number): number {
   n = Math.imul(n ^ (n >>> 16), 0x7feb352d);
@@ -37,7 +61,9 @@ export class WorldRenderer {
   camera = new Camera();
   dpr = 1;
   client: SimClient;
-  overlays: Overlays = { territory: true, vegetation: true, weather: true, labels: true };
+  overlays: Overlays = { territory: true, vegetation: true, weather: true, labels: true, migration: true };
+  lens: Lens = 'none';
+  selectedSettlementId: number | null = null;
   selectedId: number | null = null;
   followSelected = false;
   hoverId: number | null = null;
@@ -299,13 +325,23 @@ export class WorldRenderer {
       const dd = (d.x - wx) ** 2 + (d.y - wy) ** 2;
       if (dd < bd) { bd = dd; best = id; }
     }
-    if (best >= 0) return { kind: 'creature', id: best };
     const f = this.lastFrame;
+    // Migration markers sit above creatures in picking: they are what the eye lands on.
+    if (f && this.overlays.migration) {
+      const gr = Math.max(1.2, 9 / this.camera.zoom);
+      for (const g of f.groups) {
+        if ((g.x - wx) ** 2 + (g.y - wy) ** 2 < gr * gr) return { kind: 'group', id: g.id, tribeId: g.tribeId, settlementId: g.originId >= 0 ? g.originId : g.destId };
+      }
+    }
+    if (best >= 0) return { kind: 'creature', id: best };
     if (f) {
-      for (const s of f.settlements) {
-        if (s.destroyed) continue;
-        const rr = Math.max(1.6 + s.tier * 0.8, 10 / this.camera.zoom);
-        if ((s.x - wx) ** 2 + (s.y - wy) ** 2 < rr * rr) return { kind: 'settlement', id: s.id, tribeId: s.tribeId };
+      // Active towns first, then ruins (still inspectable: they keep their history).
+      for (const pass of [false, true]) {
+        for (const s of f.settlements) {
+          if (s.destroyed !== pass) continue;
+          const rr = Math.max(1.6 + s.tier * 0.8, 10 / this.camera.zoom);
+          if ((s.x - wx) ** 2 + (s.y - wy) ** 2 < rr * rr) return { kind: 'settlement', id: s.id, tribeId: s.tribeId };
+        }
       }
     }
     return { kind: 'none', id: -1 };
@@ -407,6 +443,21 @@ export class WorldRenderer {
         }
       }
     }
+    // Fields of abandoned settlements go wild: fading furrows overtaken by green.
+    if (z > 1.6) {
+      for (const s of f.settlements) {
+        if (!s.destroyed || !s.oldFarms.length) continue;
+        const fc = s.farmCondition;
+        for (const i of s.oldFarms) {
+          const x = i % tw, y = (i / tw) | 0;
+          if (x < b.x0 || x > b.x1 || y < b.y0 || y > b.y1) continue;
+          ctx.fillStyle = `rgba(178,160,86,${0.45 * fc})`;
+          ctx.fillRect(x + 0.06, y + 0.06, 0.88, 0.88);
+          ctx.fillStyle = `rgba(86,140,64,${0.5 * (1 - fc) + 0.12})`;
+          for (let k = 0; k < 4; k++) ctx.fillRect(x + h32(i * 7 + k) * 0.8, y + h32(i * 11 + k) * 0.8, 0.22, 0.22);
+        }
+      }
+    }
     // Water glints.
     const t = now / 1000;
     ctx.fillStyle = 'rgba(220,240,255,0.9)';
@@ -438,6 +489,7 @@ export class WorldRenderer {
       }
     }
     this.drawSettlements(f.settlements, toS, b, now);
+    if (this.overlays.migration) this.drawMigration(f.groups, toS, now);
     this.drawCreatures(toS, b, now);
     ctx.globalAlpha = 1;
     ctx.lineCap = 'butt';
@@ -517,6 +569,8 @@ export class WorldRenderer {
     ctx.globalCompositeOperation = 'source-over';
 
     // ---- Labels and UI-ish overlays ----
+    if (this.lens !== 'none') this.drawLens(f.settlements, toS, b);
+    this.drawSettlementSelection(f.settlements, toS, now);
     if (this.overlays.labels) this.drawLabels(f.settlements, toS, b);
     this.drawBrush();
     if (this.vignette) {
@@ -543,11 +597,7 @@ export class WorldRenderer {
       const [sx, sy] = toS(s.x, s.y);
       const col = `hsl(${Math.round(s.hue * 360)}, 70%, 60%)`;
       if (s.destroyed) {
-        ctx.fillStyle = 'rgba(60,56,52,0.85)';
-        for (let k = 0; k < 7; k++) {
-          const a = h32(s.id * 31 + k) * 6.28, r = h32(s.id * 17 + k) * z * 1.4;
-          ctx.fillRect(sx + Math.cos(a) * r, sy + Math.sin(a) * r, Math.max(1.5, z * 0.3), Math.max(1.5, z * 0.22));
-        }
+        this.drawRuin(s, sx, sy);
         continue;
       }
       if (z < 2.6) {
@@ -620,6 +670,145 @@ export class WorldRenderer {
         ctx.fillRect(sx - R, sy + R * 1.3, (2 * R) * (s.health / 100), Math.max(2, z * 0.15));
       }
     }
+  }
+
+  /** Abandoned places decay by material: timber rots in a few years, stone and walls last decades. */
+  private drawRuin(s: SettlementView, sx: number, sy: number): void {
+    const ctx = this.ctx, z = this.camera.zoom;
+    const R = (1.6 + s.tier * 1.0) * Math.max(z, 1);
+    if (z < 2.6) {
+      ctx.strokeStyle = `rgba(150,160,172,${0.35 + 0.4 * Math.max(s.wood, s.stone)})`;
+      ctx.lineWidth = 1.2;
+      ctx.setLineDash(s.state === 'ruins' ? [2, 2] : []);
+      ctx.beginPath(); ctx.arc(sx, sy, 3 + s.tier * 1.2, 0, Math.PI * 2); ctx.stroke();
+      ctx.setLineDash([]);
+      return;
+    }
+    // Bare ground where the town stood.
+    ctx.fillStyle = `rgba(92,80,64,${0.18 + 0.25 * Math.max(s.wood, s.stone)})`;
+    ctx.beginPath(); ctx.ellipse(sx, sy, R * 1.1, R, 0, 0, Math.PI * 2); ctx.fill();
+    // Broken walls.
+    if (s.wallCondition > 0.05) {
+      ctx.strokeStyle = `rgba(150,146,136,${0.25 + 0.6 * s.wallCondition})`;
+      ctx.lineWidth = Math.max(1.2, z * 0.18);
+      ctx.setLineDash([z * 0.9 * (0.4 + s.wallCondition), z * 0.6 * (1.2 - s.wallCondition)]);
+      ctx.beginPath(); ctx.ellipse(sx, sy, R * 1.2, R * 1.1, 0, 0, Math.PI * 2); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    const hs = Math.max(2.2, z * 0.38);
+    // Standing timber houses, dark and roofless, while the wood lasts.
+    const standing = Math.round(Math.min(30, 4 + s.population / 2 + s.tier * 6) * s.wood);
+    for (let k = 0; k < standing; k++) {
+      const a = k * 2.39996 + s.id;
+      const rr = R * (0.28 + 0.72 * Math.sqrt((k + 0.5) / Math.max(1, standing)));
+      const hx = sx + Math.cos(a) * rr, hy = sy + Math.sin(a) * rr * 0.9;
+      ctx.fillStyle = `rgba(88,70,52,${0.45 + 0.4 * s.wood})`;
+      ctx.fillRect(hx - hs / 2, hy - hs * 0.15, hs, hs * 0.55);
+    }
+    // Stone rubble outlasts everything.
+    const rubble = 3 + Math.round(10 * s.stone + 6 * s.wood);
+    for (let k = 0; k < rubble; k++) {
+      const a = h32(s.id * 31 + k) * 6.28, r = Math.sqrt(h32(s.id * 17 + k)) * R;
+      const stone = k < 10 * s.stone + 3;
+      ctx.fillStyle = stone ? 'rgba(140,138,132,0.85)' : 'rgba(82,64,46,0.8)';
+      ctx.fillRect(sx + Math.cos(a) * r, sy + Math.sin(a) * r, Math.max(1.5, z * 0.28), Math.max(1.2, z * 0.2));
+    }
+  }
+
+  /** Migration on the map: the road travelled (faint), the road ahead (dashed), and a marker sized by group size. */
+  private drawMigration(groups: MigrationGroupView[], toS: (x: number, y: number) => [number, number], now: number): void {
+    if (!groups.length) return;
+    const ctx = this.ctx, z = this.camera.zoom;
+    for (const g of groups) {
+      const col = g.kind === 'refugee' ? KIND_COLOR.refugee : g.kind === 'colonist' ? KIND_COLOR.colonist : `hsl(${Math.round(g.hue * 360)}, 70%, 64%)`;
+      const [ox, oy] = toS(g.ox, g.oy), [px, py] = toS(g.x, g.y), [dx, dy] = toS(g.dx, g.dy);
+      ctx.lineCap = 'round';
+      ctx.strokeStyle = col;
+      ctx.globalAlpha = 0.28;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(ox, oy); ctx.lineTo(px, py); ctx.stroke();
+      ctx.globalAlpha = 0.75;
+      ctx.setLineDash([5, 5]);
+      ctx.lineDashOffset = -((now / 60) % 10);
+      ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(dx, dy); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.lineDashOffset = 0;
+      // Destination: a larger open ring for a new site, a smaller one on an existing town.
+      ctx.globalAlpha = 0.8;
+      ctx.beginPath(); ctx.arc(dx, dy, g.destId >= 0 ? 4 : 5.5, 0, Math.PI * 2); ctx.stroke();
+      // Marker with a direction chevron.
+      ctx.globalAlpha = 1;
+      const r = Math.min(9, 3.2 + Math.sqrt(g.size) * 1.1);
+      ctx.fillStyle = col;
+      ctx.strokeStyle = 'rgba(6,9,14,0.9)';
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(px, py, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      const ang = Math.atan2(dy - py, dx - px);
+      ctx.fillStyle = 'rgba(6,9,14,0.85)';
+      ctx.beginPath();
+      ctx.moveTo(px + Math.cos(ang) * r * 0.75, py + Math.sin(ang) * r * 0.75);
+      ctx.lineTo(px + Math.cos(ang + 2.4) * r * 0.55, py + Math.sin(ang + 2.4) * r * 0.55);
+      ctx.lineTo(px + Math.cos(ang - 2.4) * r * 0.55, py + Math.sin(ang - 2.4) * r * 0.55);
+      ctx.closePath(); ctx.fill();
+      if (z >= 3.2 && this.overlays.labels) {
+        const noun = g.kind === 'refugee' ? 'refugee' : g.kind === 'colonist' ? 'colonist' : 'migrant';
+        const label = `${g.size} ${noun}${g.size === 1 ? '' : 's'} to ${g.destName}`;
+        ctx.font = '600 10.5px Inter, system-ui, sans-serif';
+        ctx.textAlign = 'start';
+        const w = ctx.measureText(label).width + 8;
+        ctx.fillStyle = 'rgba(4,6,12,0.7)';
+        ctx.fillRect(px + r + 4, py - 7, w, 14);
+        ctx.fillStyle = 'rgba(230,238,244,0.92)';
+        ctx.fillText(label, px + r + 8, py + 4);
+      }
+    }
+    ctx.globalAlpha = 1;
+    ctx.lineCap = 'butt';
+  }
+
+  /** Analytical lens: one ring per settlement coloured by the chosen measure. */
+  private drawLens(list: SettlementView[], toS: (x: number, y: number) => [number, number], b: { x0: number; y0: number; x1: number; y1: number }): void {
+    const ctx = this.ctx, z = this.camera.zoom;
+    for (const s of list) {
+      if (s.x < b.x0 - 6 || s.x > b.x1 + 6 || s.y < b.y0 - 6 || s.y > b.y1 + 6) continue;
+      const [sx, sy] = toS(s.x, s.y);
+      const base = Math.max(9, (1.6 + s.tier) * z * 1.45);
+      if (this.lens === 'density') {
+        if (s.destroyed) continue;
+        const r = Math.max(5, Math.sqrt(s.population) * Math.max(2.4, z * 0.55));
+        ctx.fillStyle = `hsla(${Math.round(s.hue * 360)}, 70%, 60%, 0.22)`;
+        ctx.strokeStyle = `hsla(${Math.round(s.hue * 360)}, 70%, 68%, 0.9)`;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.arc(sx, sy, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+        continue;
+      }
+      let col: string;
+      if (this.lens === 'condition') col = STATE_COLOR[s.state] ?? '#a9b8c6';
+      else if (s.destroyed) continue;
+      else col = this.lens === 'prosperity' ? prosperityColor(s.prosperity) : foodColor(s.nourishment);
+      ctx.strokeStyle = 'rgba(6,9,14,0.85)';
+      ctx.lineWidth = 5;
+      ctx.setLineDash(s.destroyed ? [3, 3] : []);
+      ctx.beginPath(); ctx.arc(sx, sy, base, 0, Math.PI * 2); ctx.stroke();
+      ctx.strokeStyle = col;
+      ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(sx, sy, base, 0, Math.PI * 2); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+  }
+
+  private drawSettlementSelection(list: SettlementView[], toS: (x: number, y: number) => [number, number], now: number): void {
+    if (this.selectedSettlementId === null) return;
+    const s = list.find((x) => x.id === this.selectedSettlementId);
+    if (!s) return;
+    const ctx = this.ctx, z = this.camera.zoom;
+    const [sx, sy] = toS(s.x, s.y);
+    const r = Math.max(12, (1.6 + s.tier) * z * 1.6) + Math.sin(now / 260) * 1.5;
+    ctx.strokeStyle = 'rgba(127,224,196,0.95)';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(sx, sy, r, 0, Math.PI * 2); ctx.stroke();
+    ctx.strokeStyle = 'rgba(127,224,196,0.35)';
+    ctx.beginPath(); ctx.arc(sx, sy, r + 4, 0, Math.PI * 2); ctx.stroke();
   }
 
   private drawCreatures(toS: (x: number, y: number) => [number, number], b: { x0: number; y0: number; x1: number; y1: number }, now: number): void {
@@ -919,8 +1108,20 @@ export class WorldRenderer {
     if (z >= 3.2) {
       ctx.font = `600 ${Math.round(Math.min(14, 9 + z * 0.15))}px "Chakra Petch", sans-serif`;
       for (const s of list) {
-        if (s.destroyed) continue;
         if (s.x < b.x0 || s.x > b.x1 || s.y < b.y0 || s.y > b.y1) continue;
+        if (s.destroyed) {
+          // Ruins are named only up close, in a quiet slate.
+          if (z < 5.5) continue;
+          const [rx, ry] = toS(s.x, s.y);
+          const ly = ry + (1.6 + s.tier) * z * 1.3 + 12;
+          const rl = s.state === 'ruins' ? `Ruins of ${s.name}` : `${s.name} · abandoned`;
+          ctx.fillStyle = 'rgba(4,6,12,0.55)';
+          const rw = ctx.measureText(rl).width + 10;
+          ctx.fillRect(rx - rw / 2, ly - 11, rw, 15);
+          ctx.fillStyle = 'rgba(169,184,198,0.8)';
+          ctx.fillText(rl, rx, ly);
+          continue;
+        }
         if (z < 7 && s.tier === 0 && s.population < 25) continue; // small camps are labelled only up close
         const [sx, sy] = toS(s.x, s.y);
         const yy = sy + (1.6 + s.tier * 1.0) * z * 1.3 + 12;
@@ -963,6 +1164,12 @@ export class WorldRenderer {
       g.fillRect(d.x * sx, d.y * sy, 1, 1);
     }
     const f = this.lastFrame;
+    if (f && this.overlays.migration) {
+      for (const m of f.groups) {
+        g.fillStyle = m.kind === 'refugee' ? KIND_COLOR.refugee : m.kind === 'colonist' ? KIND_COLOR.colonist : `hsl(${Math.round(m.hue * 360)}, 70%, 64%)`;
+        g.beginPath(); g.arc(m.x * sx, m.y * sy, 2.5, 0, Math.PI * 2); g.fill();
+      }
+    }
     if (f) {
       g.globalAlpha = Math.max(0, (1 - f.env.daylight) * 0.45);
       g.fillStyle = '#0a1430';

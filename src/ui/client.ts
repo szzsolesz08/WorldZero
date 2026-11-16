@@ -12,7 +12,11 @@ export function getClient(): SimClient {
   client = c;
   const st = () => useUI.getState();
   c.on('ready', (m) => {
-    st().set({ ready: true, loading: null, seed: m.seed, scenario: m.scenario, scenarioName: m.scenario.name, events: [], selectedCreature: null, creature: null, follow: false, selectedTribe: null });
+    st().set({
+      ready: true, loading: null, seed: m.seed, scenario: m.scenario, scenarioName: m.scenario.name, events: [], selectedCreature: null, creature: null,
+      follow: false, selectedTribe: null, selectedSettlement: null, settlement: null, objectives: [], counters: null,
+    });
+    c.selectSettlement(null);
     applySpeed();
   });
   c.on('progress', (m) => st().set({ loading: { label: m.label, progress: m.total > 0 ? m.done / m.total : 0 } }));
@@ -28,7 +32,7 @@ export function getClient(): SimClient {
     const s = m.stats;
     st().set({
       summary: s.summary, history: s.history, speciesHistory: s.speciesHistory, species: s.species, tribes: s.tribes,
-      deathCauses: s.deathCauses, scenarioName: s.scenarioName, seed: s.seed,
+      deathCauses: s.deathCauses, scenarioName: s.scenarioName, seed: s.seed, objectives: s.objectives, counters: s.counters,
     });
     st().pushEvents(s.events);
   });
@@ -41,12 +45,37 @@ export function getClient(): SimClient {
       s.set({ creature: null });
     }
   });
+  c.on('settlement', (m) => {
+    const s = st();
+    if (m.detail && m.detail.id === s.selectedSettlement) s.set({ settlement: m.detail });
+    else if (!m.detail && s.selectedSettlement !== null) s.set({ settlement: null });
+  });
   c.on('away', (m) => st().set({ away: { ticks: m.ticks, events: m.events, popBefore: m.popBefore, popAfter: m.popAfter }, loading: null }));
   c.on('error', (m) => {
     console.error(m.message);
     st().set({ error: m.message, loading: null });
   });
   return c;
+}
+
+/** Open the settlement inspector (closes the creature inspector: one inspector at a time). */
+export function selectSettlement(id: number | null): void {
+  const s = useUI.getState();
+  if (id === null) {
+    s.set({ selectedSettlement: null, settlement: null });
+  } else {
+    s.set({ selectedSettlement: id, settlement: s.settlement?.id === id ? s.settlement : null, selectedCreature: null, creature: null, follow: false });
+    getClient().select(null);
+  }
+  getClient().selectSettlement(id);
+}
+
+/** Open the creature inspector (closes the settlement inspector). */
+export function selectCreature(id: number | null): void {
+  const s = useUI.getState();
+  s.set({ selectedCreature: id, creature: null, ...(id !== null ? { selectedSettlement: null, settlement: null } : { follow: false }) });
+  getClient().select(id);
+  if (id !== null) getClient().selectSettlement(null);
 }
 
 export function applySpeed(): void {
