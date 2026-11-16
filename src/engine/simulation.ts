@@ -29,6 +29,7 @@ export type FxKind = 'lightning' | 'quake' | 'meteor' | 'volcano' | 'fire' | 'pl
 export interface Fx { kind: FxKind; x: number; y: number; r: number; tick: number }
 
 import { FRAME_STRIDE, FLAG } from './frame';
+import { dist2d } from './mathutil';
 export { FRAME_STRIDE, FLAG };
 
 const WORLD_ARRAYS = ['elevation', 'moisture', 'baseTemp', 'biome', 'river', 'fertility', 'veg', 'waterDist', 'landmass', 'ore', 'fire', 'farm', 'territory', 'rain', 'lake'] as const;
@@ -49,6 +50,7 @@ export class Simulation {
   stats = new StatsTracker();
   archive = new Map<number, ArchivedCreature>();
   carcasses: Carcass[] = [];
+  carcassMap = new Map<number, Carcass>();
   nextCarcassId = 1;
   settings: SimSettings;
   scenario: ScenarioConfig;
@@ -72,6 +74,8 @@ export class Simulation {
   lastClimateEventOffset = 0;
   epidemicReported = 0;
   extinctionReported = false;
+  /** Optional per-phase timing (ms accumulated), enabled by setting to {}. */
+  prof: Record<string, number> | null = null;
 
   private constructor(seed: string, rng: Rng, world: World, scenario: ScenarioConfig) {
     this.seed = seed;
@@ -171,7 +175,7 @@ export class Simulation {
       const temp = w.baseTemp[i] + this.climate.globalOffset();
       let s = (carn ? 0.6 : 2) * w.fertility[i] - w.waterDist[i] * 0.08 - Math.max(0, low - temp) * 0.15 - Math.max(0, temp - high) * 0.15 + rng.next() * 0.3;
       for (const a of avoid) {
-        const d = Math.hypot(a.x - x, a.y - y);
+        const d = dist2d(a.x - x, a.y - y);
         if (d < 25) s -= (25 - d) * 0.06;
       }
       if (s > bs) { bs = s; bx = x; by = y; }
@@ -279,6 +283,7 @@ export class Simulation {
     const meat = CARCASS_MEAT_PER_SIZE * c.effSize;
     const carcass: Carcass = { id: this.nextCarcassId++, x: c.x, y: c.y, meat, size: c.effSize };
     this.carcasses.push(carcass);
+    this.carcassMap.set(carcass.id, carcass);
     if (killer) {
       killer.kills++;
       if (killer.tribeId >= 0 && killer.job === 'hunt') {
@@ -334,8 +339,8 @@ export class Simulation {
   }
 
   carcassById(id: number): Carcass | null {
-    for (const k of this.carcasses) if (k.id === id && k.meat > 0) return k;
-    return null;
+    const k = this.carcassMap.get(id);
+    return k && k.meat > 0 ? k : null;
   }
 
   onLandmassVisit(c: Creature, lm: number): void {
@@ -366,15 +371,20 @@ export class Simulation {
       this.queue = [];
       for (const cmd of q) applyCommand(this, cmd);
     }
+    const P = this.prof;
+    let t0 = P ? performance.now() : 0;
+    const mark = (k: string) => { if (P) { const t = performance.now(); P[k] = (P[k] ?? 0) + t - t0; t0 = t; } };
     this.climate.update(this.world, this.rng, tick);
     if (tick % VEG_INTERVAL === 0) this.lastVeg = updateVegetation(this.world, this.climate, this.rng, tick, this.settings.foodMult);
-
+    mark('world');
     this.spatial.rebuild(this.creatures);
+    mark('spatial');
     const cs = this.creatures;
     for (let i = 0; i < cs.length; i++) {
       const c = cs[i];
       if (c.alive) updateCreature(this, c);
     }
+    mark('creatures');
     // Compact the dead and add newborns.
     let j = 0;
     for (let i = 0; i < cs.length; i++) if (cs[i].alive) cs[j++] = cs[i];
@@ -385,13 +395,20 @@ export class Simulation {
     }
     if (tick % 10 === 0 && this.carcasses.length) {
       let k = 0;
-      for (const cc of this.carcasses) { cc.meat -= CARCASS_DECAY * 10 * (1 + cc.size * 0.2); if (cc.meat > 0.5) this.carcasses[k++] = cc; }
+      for (const cc of this.carcasses) {
+        cc.meat -= CARCASS_DECAY * 10 * (1 + cc.size * 0.2);
+        if (cc.meat > 0.5) this.carcasses[k++] = cc;
+        else this.carcassMap.delete(cc.id);
+      }
       this.carcasses.length = k;
     }
+    mark('misc');
     if (tick % CIV_INTERVAL === 0) this.civ.update(this);
+    mark('civ');
     if (tick % SPECIATION_INTERVAL === 0) this.speciationPass();
     if (tick % STATS_INTERVAL === 0) this.statsPass();
     if (tick % TICKS_PER_DAY === 0) this.dailyPass();
+    mark('periodic');
     if (this.fx.length > 200) this.fx.splice(0, this.fx.length - 200);
   }
 
@@ -790,6 +807,7 @@ export class Simulation {
     sim.stats = StatsTracker.deserialize(s.stats);
     for (const a of s.archive) sim.archive.set(a.id, a);
     sim.carcasses = s.carcasses;
+    for (const k of sim.carcasses) sim.carcassMap.set(k.id, k);
     sim.nextCarcassId = s.nextCarcassId;
     sim.nextId = s.nextId;
     Object.assign(sim, s.counters);

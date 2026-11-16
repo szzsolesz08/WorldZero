@@ -36,6 +36,7 @@ export function TopBar() {
   const speed = useUI((s) => s.speed);
   const paused = useUI((s) => s.paused);
   const tps = useUI((s) => s.measuredTps);
+  const msPerTick = useUI((s) => s.msPerTick);
   const summary = useUI((s) => s.summary);
   const scenarioName = useUI((s) => s.scenarioName);
   const seed = useUI((s) => s.seed);
@@ -103,7 +104,7 @@ export function TopBar() {
         {SPEEDS.map((sp, i) => (
           <button key={sp} onClick={() => setSpeed(sp)} aria-pressed={!paused && speed === sp} title={`${sp}× speed (${i + 1})`}>{sp}×</button>
         ))}
-        <span className="tps num" title="Simulated ticks per second (actual)">{paused ? 'paused' : `${Math.round(tps)} t/s`}</span>
+        <span className="tps num" title={`Simulated ticks per second (actual) · ${msPerTick.toFixed(2)} ms per tick`}>{paused ? 'paused' : `${Math.round(tps)} t/s`}</span>
       </div>
       <div className="spacer" />
       {summary && (
@@ -115,7 +116,7 @@ export function TopBar() {
       )}
       <div className="topbar-sep" />
       <button className="btn primary" onClick={() => set({ scenarioDialog: true })} title="Generate a new world or choose a scenario (N)">
-        <Globe2 size={14} /> New world
+        <Globe2 size={14} /> <span className="btn-label">New world</span>
       </button>
       <button className="btn icon" onClick={quickSave} title="Save world" aria-label="Save world"><Save size={14} /></button>
       <button className="btn icon" onClick={quickLoad} title="Load saved world" aria-label="Load saved world"><FolderOpen size={14} /></button>

@@ -42,6 +42,7 @@ export interface FramePayload {
   env: EnvironmentView;
   tps: number;
   paused: boolean;
+  msPerTick: number;
 }
 
 export interface StatsPayload {

@@ -17,6 +17,10 @@ let sentTerrainVersion = -1;
 let ticksWindow = 0, windowStart = performance.now(), measuredTps = 0;
 let busy = false; // catching up
 let scheduled = false;
+let stepMs = 0, stepCount = 0, msPerTick = 0;
+// MessageChannel gives an unclamped "run again ASAP" (setTimeout(0) is clamped to 4ms when nested).
+const kick = new MessageChannel();
+kick.port1.onmessage = () => loop();
 const MAX_CATCHUP = TICKS_PER_DAY * 24;
 
 function post(msg: FromWorker, transfer: Transferable[] = []): void {
@@ -68,7 +72,7 @@ function sendFrame(now: number): void {
   const fx = sim.fx.splice(0);
   post({
     t: 'frame',
-    frame: { tick: sim.tick, count, buf, settlements, weather, carcasses, fx, env: sim.environment(), tps: measuredTps, paused },
+    frame: { tick: sim.tick, count, buf, settlements, weather, carcasses, fx, env: sim.environment(), tps: measuredTps, paused, msPerTick },
   }, [buf.buffer]);
   lastFrame = now;
 }
@@ -101,7 +105,8 @@ function sendDetail(): void {
 function schedule(delay: number): void {
   if (scheduled) return;
   scheduled = true;
-  setTimeout(loop, delay);
+  if (delay <= 0) kick.port2.postMessage(0);
+  else setTimeout(loop, delay);
 }
 
 function loop(): void {
@@ -119,10 +124,15 @@ function loop(): void {
         sim.step();
         acc -= 1;
         ticksWindow++;
+        stepCount++;
       }
+      stepMs += performance.now() - start;
     }
     if (now - windowStart >= 1000) {
       measuredTps = (ticksWindow * 1000) / (now - windowStart);
+      msPerTick = stepCount > 0 ? stepMs / stepCount : msPerTick;
+      stepMs = 0;
+      stepCount = 0;
       ticksWindow = 0;
       windowStart = now;
     }
@@ -156,16 +166,20 @@ async function catchUp(ticks: number): Promise<void> {
   const popBefore = s.creatures.length;
   const startEvent = s.events.nextId;
   let done = 0;
+  const began = performance.now();
+  const BUDGET_MS = 8000; // never keep the user waiting longer than this
   while (done < total) {
     const start = performance.now();
     while (done < total && performance.now() - start < 40) { s.step(); done++; }
-    post({ t: 'progress', done, total, label: 'The world lived on while you were away…' });
+    const elapsed = performance.now() - began;
+    post({ t: 'progress', done: Math.max(done / total, elapsed / BUDGET_MS) * 1000, total: 1000, label: 'The world lived on while you were away…' });
     await new Promise((r) => setTimeout(r, 0));
     if (sim !== s) return;
+    if (elapsed > BUDGET_MS) break;
   }
   busy = false;
   const events = s.events.events.filter((e) => e.id >= startEvent && e.level >= 2);
-  post({ t: 'away', ticks: total, events, popBefore, popAfter: s.creatures.length });
+  post({ t: 'away', ticks: done, events, popBefore, popAfter: s.creatures.length });
   sendTerrain();
   sendLayers();
   sendStats();

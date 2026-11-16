@@ -16,12 +16,13 @@ export function getClient(): SimClient {
     applySpeed();
   });
   c.on('progress', (m) => st().set({ loading: { label: m.label, progress: m.total > 0 ? m.done / m.total : 0 } }));
+  let lastEnvPush = 0;
   c.on('frame', (m) => {
-    const s = st();
-    // Keep high-frequency env updates light: only push when the displayed values change meaningfully.
-    if (!s.env || s.env.tick !== m.frame.env.tick || Math.abs(s.measuredTps - m.frame.tps) > 0.5) {
-      s.set({ env: m.frame.env, measuredTps: m.frame.tps });
-    }
+    // The renderer reads frames directly; the React store only needs ~5 updates per second.
+    const now = performance.now();
+    if (now - lastEnvPush < 200 && st().env) return;
+    lastEnvPush = now;
+    st().set({ env: m.frame.env, measuredTps: m.frame.tps, msPerTick: m.frame.msPerTick });
   });
   c.on('stats', (m) => {
     const s = m.stats;

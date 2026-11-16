@@ -22,9 +22,9 @@ export const VEG_GROWTH = 0.012; // regrowth rate per vegetation pass
 export const VEG_RESERVE = 0.6;
 
 // ---- Population ----
-export const MAX_POPULATION = 4000;
-export const DECIDE_INTERVAL = 6;
-export const SPATIAL_CELL = 8;
+export const MAX_POPULATION = 3200;
+export const DECIDE_INTERVAL = 8;
+export const SPATIAL_CELL = 4;
 
 // ---- Energy model ----
 export const BASAL_COST = 0.05; // energy per tick for size-1 creature at rest

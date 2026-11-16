@@ -7,8 +7,10 @@ import {
   PLANT_ENERGY, MEAT_ENERGY, REGEN_RATE, STARVE_DAMAGE, THIRST_RATE, BITE, TICKS_PER_YEAR, VEG_RESERVE,
 } from '../constants';
 import type { Action } from '../types';
+import { dist2d } from '../mathutil';
 
 const nb: Creature[] = [];
+const MOVE_OFFSETS = [0, 0.7, -0.7, 1.4, -1.4, 2.2, -2.2];
 const rally: Creature[] = [];
 
 function hurt(c: Creature, amount: number, cause: string): void {
@@ -116,7 +118,7 @@ export function decide(sim: Simulation, c: Creature): void {
   const restTime = c.nocturnal ? cl.daylight(tick) > 0.65 : night;
   const percMult = night && !c.nocturnal ? 0.6 : 1;
   const perc = c.perception * percMult;
-  const n = sim.spatial.query(c.x, c.y, perc, nb, 56, c);
+  const n = sim.spatial.query(c.x, c.y, Math.min(perc, 9.5), nb, 32, c);
 
   const hunger = 1 - c.energy / c.maxEnergy;
   const thirst = 1 - c.hydration;
@@ -156,9 +158,11 @@ export function decide(sim: Simulation, c: Creature): void {
         const s = (o.id === c.mateId ? 3 : 1) / (1 + Math.sqrt(d2));
         if (s > mateScore) { mateScore = s; mate = o; }
       }
-      const r = c.relation(o.id);
-      const fs = (r ? 1 + r.affinity : 0.5) / (1 + Math.sqrt(d2));
-      if (fs > friendScore && d2 > 4) { friendScore = fs; friend = o; }
+      if (same <= 12 && d2 > 4) {
+        const r = c.relations.length ? c.relation(o.id) : undefined;
+        const fs = (r ? 1 + r.affinity : 0.5) / (1 + Math.sqrt(d2));
+        if (fs > friendScore) { friendScore = fs; friend = o; }
+      }
     }
   }
   if (threat) {
@@ -172,23 +176,22 @@ export function decide(sim: Simulation, c: Creature): void {
   // ---- Score options ----
   let best = 'explore' as Action;
   let bs = 0.3 + c.curiosity * 0.5 + rng.next() * 0.2;
-  const consider = (a: Action, s: number) => { if (s > bs) { bs = s; best = a; } };
 
   const mother = !c.mature && c.age < c.maturity * 0.65 ? sim.byId.get(c.motherId) : undefined;
-  if (mother && mother.alive) consider('follow', 2.2);
+  if (mother && mother.alive) { const v = 2.2; if (v > bs) { bs = v; best = 'follow'; } }
   if (threat) {
     const prox = 1 - Math.sqrt(threatD2) / Math.max(1, perc);
     const strongEnough = c.strength * (c.tribeId >= 0 ? sim.civ.combatBonus(c) : 1) > threat.strength * 0.9;
-    consider('flee', 2.5 + prox * 5 - c.aggression * 2 - (strongEnough ? 1.5 : 0));
-    if (childInDanger || (c.job === 'guard' && c.tribeId >= 0)) consider('defend', 3 + c.aggression * 3 + (strongEnough ? 2 : 0));
+    { const v = 2.5 + prox * 5 - c.aggression * 2 - (strongEnough ? 1.5 : 0); if (v > bs) { bs = v; best = 'flee'; } }
+    if (childInDanger || (c.job === 'guard' && c.tribeId >= 0)) { const v = 3 + c.aggression * 3 + (strongEnough ? 2 : 0); if (v > bs) { bs = v; best = 'defend'; } }
   }
-  consider('graze', hunger * 3 + hunger * hunger * 3 + (hunger > 0.65 ? 2.5 : 0));
-  consider('drink', thirst * 3 + thirst * thirst * 3 + (thirst > 0.6 ? 3 : 0));
-  if (canMate) consider('mate', mate ? 1.6 + c.energy / c.maxEnergy : 0.85);
-  if (restTime) consider('rest', 1.6);
-  if (c.stress > 6 || c.storm > 0.5) consider('rest', 1.2 + c.stress * 0.1 + c.storm);
-  consider('socialize', c.sociability * (same < 3 ? 1.1 : 0.2));
-  if (c.tribeId >= 0 && !restTime && c.mature) consider('work', 1.1);
+  { const v = hunger * 3 + hunger * hunger * 3 + (hunger > 0.65 ? 2.5 : 0); if (v > bs) { bs = v; best = 'graze'; } }
+  { const v = thirst * 3 + thirst * thirst * 3 + (thirst > 0.6 ? 3 : 0); if (v > bs) { bs = v; best = 'drink'; } }
+  if (canMate) { const v = mate ? 1.6 + c.energy / c.maxEnergy : 0.85; if (v > bs) { bs = v; best = 'mate'; } }
+  if (restTime) { const v = 1.6; if (v > bs) { bs = v; best = 'rest'; } }
+  if (c.stress > 6 || c.storm > 0.5) { const v = 1.2 + c.stress * 0.1 + c.storm; if (v > bs) { bs = v; best = 'rest'; } }
+  { const v = c.sociability * (same < 3 ? 1.1 : 0.2); if (v > bs) { bs = v; best = 'socialize'; } }
+  if (c.tribeId >= 0 && !restTime && c.mature) { const v = 1.1; if (v > bs) { bs = v; best = 'work'; } }
 
   if (best !== c.action) c.actionTicks = 0;
   c.sprint = false;
@@ -208,7 +211,7 @@ export function decide(sim: Simulation, c: Creature): void {
       c.tx = c.x + ax * c.perception;
       c.ty = c.y + ay * c.perception;
       c.sprint = true;
-      c.decideIn = 4;
+      c.decideIn = 6;
       c.goal = `Fleeing from ${threat!.name} the ${speciesLabel(sim, threat!.speciesId)}`;
       if (tick - c.dangerTick > 600) c.remember(tick, 'danger', `Escaped ${threat!.name}, a ${speciesLabel(sim, threat!.speciesId)}`);
       c.dangerX = threat!.x; c.dangerY = threat!.y; c.dangerTick = tick;
@@ -217,7 +220,7 @@ export function decide(sim: Simulation, c: Creature): void {
         for (let k = 0; k < n; k++) {
           const o = nb[k];
           if (o.speciesId !== c.speciesId || o.action === 'flee' || o.sociability < 0.4) continue;
-          if (Math.abs(o.x - c.x) + Math.abs(o.y - c.y) > 6) continue;
+          if (o.resting || Math.abs(o.x - c.x) + Math.abs(o.y - c.y) > 4) continue;
           o.action = 'flee';
           o.tx = o.x + ax * o.perception; o.ty = o.y + ay * o.perception;
           o.sprint = true; o.actionTicks = 0; o.decideIn = 12;
@@ -269,6 +272,12 @@ export function decide(sim: Simulation, c: Creature): void {
       if (c.action === 'explore' && c.actionTicks < 200 && Math.abs(c.tx - c.x) + Math.abs(c.ty - c.y) > 1) break;
       planExplore(sim, c, null);
   }
+  // Settled states re-think less often; anything that attacks them still wakes them at once.
+  if (!threat) {
+    if (c.action === 'rest' && restTime) c.decideIn += 12;
+    else if ((c.action === 'graze' && c.tx === c.x && c.ty === c.y) || c.action === 'explore' || c.action === 'return') c.decideIn += 5;
+    else if (c.action === 'drink' && c.targetId === -3) c.decideIn += 6;
+  }
 }
 
 function planEat(sim: Simulation, c: Creature, prey: Creature | null, hunger: number): void {
@@ -278,7 +287,7 @@ function planEat(sim: Simulation, c: Creature, prey: Creature | null, hunger: nu
     const s = sim.civ.settlement(c.homeId);
     const tr = sim.civ.tribe(c.tribeId);
     if (s && tr && tr.stock.food > 2) {
-      const d = Math.hypot(s.x - c.x, s.y - c.y);
+      const d = dist2d(s.x - c.x, s.y - c.y);
       if (d < 30 && (hunger > 0.3 || d < 8)) {
         c.action = 'eat_store';
         c.tx = s.x + rng.range(-1, 1); c.ty = s.y + rng.range(-1, 1);
@@ -326,7 +335,7 @@ function planEat(sim: Simulation, c: Creature, prey: Creature | null, hunger: nu
     }
     if (c.foodX >= 0) {
       const i = w.tileAt(c.foodX, c.foodY);
-      const s = w.veg[i] - Math.hypot(c.foodX - c.x, c.foodY - c.y) * 0.06;
+      const s = w.veg[i] - dist2d(c.foodX - c.x, c.foodY - c.y) * 0.06;
       if (s > bscore) { bscore = s; bx = c.foodX; by = c.foodY; }
     }
     if (bx >= 0) {
@@ -343,7 +352,7 @@ function planEat(sim: Simulation, c: Creature, prey: Creature | null, hunger: nu
       for (let dx = -R; dx <= R; dx++) {
         const x = ccx + dx, y = ccy + dy;
         if (x < 0 || y < 0 || x >= w.chunksX || y >= w.chunksY) continue;
-        const s = w.chunkFood[y * w.chunksX + x] - Math.hypot(dx, dy) * 0.25 + rng.next() * 0.2;
+        const s = w.chunkFood[y * w.chunksX + x] - dist2d(dx, dy) * 0.25 + rng.next() * 0.2;
         if (s > bestS) { bestS = s; best = y * w.chunksX + x; }
       }
     }
@@ -363,17 +372,17 @@ function planEat(sim: Simulation, c: Creature, prey: Creature | null, hunger: nu
   const cx = ci % sp.cols, cy = Math.floor(ci / sp.cols);
   // Follow the scent of prey: pick the nearby cell with the most edible creatures.
   let bestCell = ci, bestN = -1;
-  for (let dy = -3; dy <= 3; dy++) {
-    for (let dx = -3; dx <= 3; dx++) {
+  for (let dy = -5; dy <= 5; dy += 2) {
+    for (let dx = -5; dx <= 5; dx += 2) {
       const x = cx + dx, y = cy + dy;
       if (x < 0 || y < 0 || x >= sp.cols || y >= sp.rows) continue;
-      const list = sp.cells[y * sp.cols + x];
+      const ci = y * sp.cols + x;
       let cnt = 0;
-      for (let k = 0; k < list.length; k++) {
-        const o = list[k];
+      for (let k = sp.cellStart[ci], e = sp.cellStart[ci + 1]; k < e; k++) {
+        const o = sp.refs[k];
         if (o.speciesId !== c.speciesId && o.meatEff < 0.5 && o.effSize <= c.effSize * 1.7) cnt++;
       }
-      const sc = cnt / (1 + Math.hypot(dx, dy) * 0.4) + rng.next();
+      const sc = cnt / (1 + dist2d(dx, dy) * 0.4) + rng.next();
       if (sc > bestN) { bestN = sc; bestCell = y * sp.cols + x; }
     }
   }
@@ -419,7 +428,7 @@ function planRest(sim: Simulation, c: Creature, gx: number, gy: number): void {
   if (c.tribeId >= 0 && c.homeId >= 0) {
     const s = sim.civ.settlement(c.homeId);
     if (s) {
-      const d = Math.hypot(s.x - c.x, s.y - c.y);
+      const d = dist2d(s.x - c.x, s.y - c.y);
       if (d > 2.5) {
         c.action = 'return';
         c.tx = s.x + sim.rng.range(-1.5, 1.5); c.ty = s.y + sim.rng.range(-1.5, 1.5);
@@ -449,7 +458,7 @@ function planRest(sim: Simulation, c: Creature, gx: number, gy: number): void {
     return;
   }
   c.action = 'rest';
-  if (c.sociability > 0.5 && Math.hypot(gx - c.x, gy - c.y) > 1.5) {
+  if (c.sociability > 0.5 && dist2d(gx - c.x, gy - c.y) > 1.5) {
     c.tx = gx; c.ty = gy;
     c.goal = 'Bedding down with the herd';
   } else {
@@ -468,7 +477,7 @@ export function planExplore(sim: Simulation, c: Creature, goal: string | null): 
       // Homebodies drift back toward familiar ground.
       const hx = c.homeId >= 0 ? sim.civ.settlement(c.homeId)?.x ?? c.birthX : c.birthX;
       const hy = c.homeId >= 0 ? sim.civ.settlement(c.homeId)?.y ?? c.birthY : c.birthY;
-      if (Math.hypot(hx - c.x, hy - c.y) > 20) a = Math.atan2(hy - c.y, hx - c.x) + rng.range(-0.8, 0.8);
+      if (dist2d(hx - c.x, hy - c.y) > 20) a = Math.atan2(hy - c.y, hx - c.x) + rng.range(-0.8, 0.8);
     }
     const r = c.perception * rng.range(1.2, 3.5) * (0.6 + c.curiosity);
     const x = Math.min(w.width - 1, Math.max(0, c.x + Math.cos(a) * r));
@@ -499,21 +508,29 @@ export function moveToward(sim: Simulation, c: Creature, tx: number, ty: number,
   let sp = c.speed * mult * here * burst * ageF * wound * (c.storm > 0 ? 1 - 0.3 * c.storm : 1);
   if (sp > d) sp = d;
   const desired = Math.atan2(dy, dx);
-  if (d < 2) c.heading = desired;
+  let straight = d < 2;
+  if (straight) c.heading = desired;
   else {
     let diff = desired - c.heading;
     while (diff > Math.PI) diff -= Math.PI * 2;
     while (diff < -Math.PI) diff += Math.PI * 2;
-    c.heading += diff > 0.5 ? 0.5 : diff < -0.5 ? -0.5 : diff;
+    if (diff > 0.5) c.heading += 0.5;
+    else if (diff < -0.5) c.heading -= 0.5;
+    else { c.heading = desired; straight = true; }
   }
-  const offs = [0, 0.7, -0.7, 1.4, -1.4, 2.2, -2.2];
-  for (let k = 0; k < offs.length; k++) {
-    const h = c.heading + offs[k];
-    const nx = c.x + Math.cos(h) * sp, ny = c.y + Math.sin(h) * sp;
+  for (let k = 0; k < MOVE_OFFSETS.length; k++) {
+    let nx: number, ny: number;
+    if (k === 0 && straight) {
+      // Heading equals the target direction: no trig needed.
+      nx = c.x + (dx / d) * sp; ny = c.y + (dy / d) * sp;
+    } else {
+      const h = c.heading + MOVE_OFFSETS[k];
+      nx = c.x + Math.cos(h) * sp; ny = c.y + Math.sin(h) * sp;
+    }
     if (nx < 0 || ny < 0 || nx >= w.width || ny >= w.height) continue;
     if (w.moveMult(w.tileAt(nx, ny), c.swim, sail) > 0) {
       c.x = nx; c.y = ny;
-      if (k > 0) c.heading = h;
+      if (k > 0) c.heading += MOVE_OFFSETS[k];
       c.distance += sp;
       const rel = sp / 0.1;
       c.energy -= MOVE_COST * c.effSize * rel * rel;
@@ -568,7 +585,7 @@ export function act(sim: Simulation, c: Creature): void {
     case 'follow': {
       const m = sim.byId.get(c.targetId);
       if (!m || !m.alive) { c.decideIn = 0; return; }
-      const d = Math.hypot(m.x - c.x, m.y - c.y);
+      const d = dist2d(m.x - c.x, m.y - c.y);
       if (d > 1.6) moveToward(sim, c, m.x, m.y, 1.1);
       else {
         c.resting = m.resting;
@@ -584,7 +601,7 @@ export function act(sim: Simulation, c: Creature): void {
       if (c.targetId < 0) { c.decideIn = 0; return; }
       const p = sim.byId.get(c.targetId);
       if (!p || !p.alive) { c.decideIn = 0; return; }
-      const d = Math.hypot(p.x - c.x, p.y - c.y);
+      const d = dist2d(p.x - c.x, p.y - c.y);
       if (d > c.perception * 1.6 || c.actionTicks > 160) { c.decideIn = 0; return; }
       const reach = 0.5 + (c.effSize + p.effSize) * 0.25;
       if (d <= reach) {
@@ -599,7 +616,7 @@ export function act(sim: Simulation, c: Creature): void {
     case 'scavenge': {
       const k = sim.carcassById(c.targetId);
       if (!k) { c.decideIn = 0; return; }
-      if (Math.hypot(k.x - c.x, k.y - c.y) < 0.9) {
+      if (dist2d(k.x - c.x, k.y - c.y) < 0.9) {
         const bite = Math.min(k.meat, 1.2 * c.effSize);
         k.meat -= bite;
         c.energy = Math.min(c.maxEnergy, c.energy + bite * MEAT_ENERGY * Math.max(0.15, c.meatEff));
@@ -611,7 +628,7 @@ export function act(sim: Simulation, c: Creature): void {
       const i = w.tileAt(c.x, c.y);
       if (w.waterDist[i] <= 1) {
         c.hydration = Math.min(1, c.hydration + DRINK_RATE);
-        if (c.waterX < 0 || Math.hypot(c.waterX - c.x, c.waterY - c.y) > 15) {
+        if (c.waterX < 0 || dist2d(c.waterX - c.x, c.waterY - c.y) > 15) {
           if (c.waterX < 0) c.remember(sim.tick, 'water', `Found fresh water in the ${BIOMES[w.biome[i]].name}`);
           c.waterX = c.x; c.waterY = c.y;
           if (c.tribeId >= 0) sim.civ.shareWater(c);
@@ -637,7 +654,7 @@ export function act(sim: Simulation, c: Creature): void {
         return;
       }
       if (moveToward(sim, c, c.tx, c.ty) < 0.8) {
-        if (c.waterX >= 0 && Math.hypot(c.waterX - c.x, c.waterY - c.y) < 1.5 && w.waterDist[w.tileAt(c.x, c.y)] > 2) {
+        if (c.waterX >= 0 && dist2d(c.waterX - c.x, c.waterY - c.y) < 1.5 && w.waterDist[w.tileAt(c.x, c.y)] > 2) {
           c.waterX = -1; c.waterY = -1; // that spot dried up or was misremembered
         }
         c.decideIn = 0;
@@ -647,7 +664,7 @@ export function act(sim: Simulation, c: Creature): void {
     case 'mate': {
       const p = sim.byId.get(c.targetId);
       if (!p || !p.alive || p.cooldown > 0 || c.cooldown > 0) { c.decideIn = 0; return; }
-      const d = Math.hypot(p.x - c.x, p.y - c.y);
+      const d = dist2d(p.x - c.x, p.y - c.y);
       if (d < 1.2) {
         sim.tryMate(c, p);
         c.decideIn = 0;
@@ -666,7 +683,7 @@ export function act(sim: Simulation, c: Creature): void {
         if (!f || !f.alive) { c.decideIn = 0; return; }
         tx = f.x; ty = f.y;
       }
-      const d = Math.hypot(tx - c.x, ty - c.y);
+      const d = dist2d(tx - c.x, ty - c.y);
       if (d > 1.8) moveToward(sim, c, tx, ty, 0.8);
       else {
         if (f && (sim.tick + c.id) % 20 === 0) {
@@ -732,7 +749,7 @@ export function attack(sim: Simulation, a: Creature, d: Creature): void {
     a.lastDamage = `killed by ${d.name} (${speciesLabel(sim, d.speciesId)}) in self-defence`;
     if (a.health <= 0) sim.kill(a, a.lastDamage, d);
   } else if (d.action !== 'flee') {
-    const dist = Math.hypot(d.x - a.x, d.y - a.y) || 1;
+    const dist = dist2d(d.x - a.x, d.y - a.y) || 1;
     d.action = 'flee';
     d.tx = d.x + ((d.x - a.x) / dist) * d.perception;
     d.ty = d.y + ((d.y - a.y) / dist) * d.perception;

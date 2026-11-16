@@ -656,14 +656,24 @@ export class WorldRenderer {
         ctx.beginPath(); ctx.arc(sx, sy, s * 0.9, -0.6, 0.6); ctx.stroke();
       }
       if (d.flags & FLAG.resting && z > 9) {
-        ctx.fillStyle = 'rgba(220,230,255,0.7)';
-        ctx.font = `${Math.round(z * 0.35)}px Inter Variable, sans-serif`;
-        ctx.fillText('z', sx + s * 0.45, sy - s * 0.45 - Math.sin(now / 500 + id) * 2);
+        // Small crescent moon: sleeping.
+        const r = z * 0.13, mx = sx + s * 0.5, my = sy - s * 0.5 - Math.sin(now / 600 + id) * 1.5;
+        ctx.fillStyle = 'rgba(220,230,255,0.75)';
+        ctx.beginPath();
+        ctx.arc(mx, my, r, Math.PI * 0.32, Math.PI * 1.68, false);
+        ctx.arc(mx + r * 0.5, my, r * 0.82, Math.PI * 1.42, Math.PI * 0.58, true);
+        ctx.closePath();
+        ctx.fill();
       }
       if (d.flags & FLAG.mating && z > 7) {
-        ctx.fillStyle = 'rgba(255,120,170,0.85)';
-        ctx.font = `${Math.round(z * 0.4)}px sans-serif`;
-        ctx.fillText('♥', sx - z * 0.12, sy - s * 0.6);
+        // Drawn heart: courting.
+        const r = z * 0.12, hx = sx, hy = sy - s * 0.7;
+        ctx.fillStyle = 'rgba(255,120,170,0.9)';
+        ctx.beginPath();
+        ctx.moveTo(hx, hy + r * 1.1);
+        ctx.bezierCurveTo(hx - r * 1.6, hy - r * 0.2, hx - r * 0.7, hy - r * 1.4, hx, hy - r * 0.5);
+        ctx.bezierCurveTo(hx + r * 0.7, hy - r * 1.4, hx + r * 1.6, hy - r * 0.2, hx, hy + r * 1.1);
+        ctx.fill();
       }
     }
   }
@@ -879,6 +889,7 @@ export class WorldRenderer {
       for (const s of list) {
         if (s.destroyed) continue;
         if (s.x < b.x0 || s.x > b.x1 || s.y < b.y0 || s.y > b.y1) continue;
+        if (z < 7 && s.tier === 0 && s.population < 25) continue; // small camps are labelled only up close
         const [sx, sy] = toS(s.x, s.y);
         const yy = sy + (1.6 + s.tier * 1.0) * z * 1.3 + 12;
         const label = `${s.name} · ${s.population}`;

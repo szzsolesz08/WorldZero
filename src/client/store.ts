@@ -28,6 +28,7 @@ interface UIState {
   scenarioName: string;
   env: EnvironmentView | null;
   measuredTps: number;
+  msPerTick: number;
   summary: StatsSummary | null;
   history: HistorySeries | null;
   speciesHistory: Record<number, number[]>;
@@ -67,6 +68,7 @@ export const useUI = create<UIState>((set, get) => ({
   scenarioName: '',
   env: null,
   measuredTps: 0,
+  msPerTick: 0,
   summary: null,
   history: null,
   speciesHistory: {},

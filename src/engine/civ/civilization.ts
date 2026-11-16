@@ -9,6 +9,7 @@ import {
 } from '../constants';
 import type { Job, SettlementView, TribeView } from '../types';
 import { genomeToRecord } from '../creatures/genome';
+import { dist2d } from '../mathutil';
 
 export interface Stock { food: number; wood: number; stone: number; ore: number }
 export interface Culture { militarism: number; openness: number; scholarship: number; agrarian: number }
@@ -511,7 +512,7 @@ export class CivManager {
     if (owner >= 0 && owner !== tribeId) s -= 2;
     for (const o of this.settlements) {
       if (o.destroyed) continue;
-      const d = Math.hypot(o.x - x, o.y - y);
+      const d = dist2d(o.x - x, o.y - y);
       if (d < 11) s -= 3;
     }
     return s;
@@ -654,7 +655,7 @@ export class CivManager {
     for (let i = 0; i < act.length; i++) {
       for (let j = i + 1; j < act.length; j++) {
         const a = act[i], b = act[j];
-        const d = Math.hypot(a.homeX - b.homeX, a.homeY - b.homeY);
+        const d = dist2d(a.homeX - b.homeX, a.homeY - b.homeY);
         const k = this.key(a.id, b.id);
         let r = this.relations.get(k);
         if (!r) {
@@ -717,7 +718,7 @@ export class CivManager {
         for (let x = x0; x <= x1; x++) {
           const i = y * w.width + x;
           if (!w.isLand(i)) continue;
-          const d = Math.hypot(x + 0.5 - s.x, y + 0.5 - s.y);
+          const d = dist2d(x + 0.5 - s.x, y + 0.5 - s.y);
           if (d > R) continue;
           const v = (s.tier + 1) * (1 - d / R) + 0.01;
           if (v > inf[i]) { inf[i] = v; terr[i] = t.id; }
@@ -738,7 +739,7 @@ export class CivManager {
     c.targetId = -1;
     if (!s) {
       const leader = sim.byId.get(t.leaderId);
-      if (leader && leader !== c && Math.hypot(leader.x - c.x, leader.y - c.y) > 4) {
+      if (leader && leader !== c && dist2d(leader.x - c.x, leader.y - c.y) > 4) {
         c.job = 'scout';
         c.tx = leader.x + rng.range(-2, 2); c.ty = leader.y + rng.range(-2, 2);
         c.goal = `Travelling with the band, led by ${leader.name}`;
@@ -808,7 +809,7 @@ export class CivManager {
           const o = qbuf[k];
           if (o.speciesId === c.speciesId || o.tribeId >= 0 || o.effSize > limit || o.meatEff > 0.5) continue;
           if (o.strength > c.strength * (t.techs.includes('hunting') ? 1.6 : 1.1) || o.aggression > 0.6) continue; // too dangerous
-          const sc = o.effSize / (1 + Math.hypot(o.x - c.x, o.y - c.y));
+          const sc = o.effSize / (1 + dist2d(o.x - c.x, o.y - c.y));
           if (sc > ps) { ps = sc; prey = o; }
         }
         if (prey) {
@@ -854,7 +855,7 @@ export class CivManager {
           for (const sid of et.settlementIds) {
             const es = this.settlement(sid);
             if (!es) continue;
-            const d = Math.hypot(es.x - c.x, es.y - c.y);
+            const d = dist2d(es.x - c.x, es.y - c.y);
             if (d < bd) { bd = d; best = es; }
           }
         }
@@ -873,7 +874,7 @@ export class CivManager {
           for (const sid of at.settlementIds) {
             const as = this.settlement(sid);
             if (!as) continue;
-            const d = Math.hypot(as.x - c.x, as.y - c.y);
+            const d = dist2d(as.x - c.x, as.y - c.y);
             if (d < bd) { bd = d; best = as; }
           }
         }
@@ -1061,7 +1062,7 @@ export class CivManager {
     let destroyed = 0;
     for (const s of this.settlements) {
       if (s.destroyed) continue;
-      const d = Math.hypot(s.x - x, s.y - y);
+      const d = dist2d(s.x - x, s.y - y);
       if (d > radius) continue;
       s.health -= amount * (1 - d / radius) / (s.walls ? 1.3 : 1);
       s.buildings = Math.max(0, s.buildings * (1 - 0.3 * (1 - d / radius)));
