@@ -346,7 +346,7 @@ export class CivManager {
       const founders: Creature[] = [c];
       for (let k = 0; k < n && founders.length < 10; k++) {
         const o = qbuf[k];
-        if (o.speciesId === c.speciesId && o.tribeId < 0 && o.mature && o.intelligence >= TRIBE_MIN_INT - 0.1 && o.sociability >= TRIBE_MIN_SOCIAL - 0.15) founders.push(o);
+        if (o.speciesId === c.speciesId && o.tribeId < 0 && o.mature && o.intelligence >= TRIBE_MIN_INT - 0.08 && o.sociability >= TRIBE_MIN_SOCIAL - 0.15) founders.push(o);
       }
       if (founders.length >= TRIBE_MIN_FOUNDERS) this.createTribe(sim, founders);
     }

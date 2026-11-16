@@ -52,12 +52,12 @@ export const BIRTH_COST_FATHER = 8;
 // ---- Speciation ----
 export const SPECIATION_INTERVAL = 600;
 export const SPECIATION_THRESHOLD = 0.11;
-export const ALLOPATRIC_THRESHOLD = 0.07;
+export const ALLOPATRIC_THRESHOLD = 0.045;
 export const MIN_SPECIES_SPLIT = 8;
 
 // ---- Civilization ----
 export const CIV_INTERVAL = 30;
-export const TRIBE_MIN_INT = 0.45;
+export const TRIBE_MIN_INT = 0.5;
 export const TRIBE_MIN_SOCIAL = 0.4;
 export const TRIBE_MIN_FOUNDERS = 4;
 

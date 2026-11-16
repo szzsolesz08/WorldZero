@@ -28,9 +28,8 @@ export interface Carcass { id: number; x: number; y: number; meat: number; size:
 export type FxKind = 'lightning' | 'quake' | 'meteor' | 'volcano' | 'fire' | 'plague' | 'spawn' | 'bless' | 'bloom' | 'blight' | 'birth' | 'death';
 export interface Fx { kind: FxKind; x: number; y: number; r: number; tick: number }
 
-/** Floats per creature in a render frame. */
-export const FRAME_STRIDE = 12;
-export const FLAG = { resting: 1, fleeing: 2, hunting: 4, young: 8, infected: 16, tribe: 32, notable: 64, carrying: 128, raiding: 256, mating: 512, female: 1024 } as const;
+import { FRAME_STRIDE, FLAG } from './frame';
+export { FRAME_STRIDE, FLAG };
 
 const WORLD_ARRAYS = ['elevation', 'moisture', 'baseTemp', 'biome', 'river', 'fertility', 'veg', 'waterDist', 'landmass', 'ore', 'fire', 'farm', 'territory', 'rain', 'lake'] as const;
 
