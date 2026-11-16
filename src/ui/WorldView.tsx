@@ -17,7 +17,7 @@ const TOOL_COLOR: Partial<Record<ToolId, string>> = {
   smite: 'rgba(170,200,255,0.9)', food: 'rgba(120,230,110,0.9)', blight: 'rgba(170,110,220,0.9)', rain: 'rgba(120,180,255,0.9)',
   storm: 'rgba(160,160,200,0.9)', snow: 'rgba(235,240,255,0.9)', earthquake: 'rgba(230,170,100,0.9)', meteor: 'rgba(255,150,60,0.9)',
   volcano: 'rgba(255,90,40,0.9)', wildfire: 'rgba(255,130,40,0.9)', plague: 'rgba(160,230,70,0.9)', raise: 'rgba(200,190,160,0.9)',
-  lower: 'rgba(90,150,200,0.9)', spawn: 'rgba(86,230,200,0.9)',
+  lower: 'rgba(90,150,200,0.9)', spawn: 'rgba(127,224,196,0.9)',
 };
 
 export function toolCommand(tool: ToolId, x: number, y: number): GodCommand | null {
@@ -86,7 +86,7 @@ export function WorldView() {
     const r = rendererRef;
     if (!r) return;
     r.brushRadius = TOOL_RADIUS[tool] ?? 0;
-    r.brushColor = TOOL_COLOR[tool] ?? 'rgba(86,230,200,0.8)';
+    r.brushColor = TOOL_COLOR[tool] ?? 'rgba(127,224,196,0.8)';
   }, [tool]);
 
   // Pointer interaction: drag to pan, wheel to zoom, click to use the active tool.

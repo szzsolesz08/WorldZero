@@ -43,7 +43,7 @@ export class WorldRenderer {
   hoverId: number | null = null;
   mouse: { x: number; y: number } | null = null;
   brushRadius = 0;
-  brushColor = 'rgba(86,230,200,0.8)';
+  brushColor = 'rgba(127,224,196,0.8)';
 
   private terrainCanvas = document.createElement('canvas');
   private terrainVersion = -1;
@@ -736,17 +736,17 @@ export class WorldRenderer {
         const [ax, ay] = toS(this.trail[i - 1][0], this.trail[i - 1][1]);
         const [bx, by] = toS(this.trail[i][0], this.trail[i][1]);
         if (Math.abs(ax - bx) + Math.abs(ay - by) > 200) continue;
-        ctx.strokeStyle = `rgba(86,230,200,${(i / this.trail.length) * 0.7})`;
+        ctx.strokeStyle = `rgba(127,224,196,${(i / this.trail.length) * 0.7})`;
         ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
       }
     }
     const [sx, sy] = toS(d.x, d.y);
     const pulse = 0.5 + 0.5 * Math.sin(now / 260);
     const rr = Math.max(9, d.size * z * 0.9) + pulse * 3;
-    ctx.strokeStyle = 'rgba(86,230,200,0.95)';
+    ctx.strokeStyle = 'rgba(127,224,196,0.95)';
     ctx.lineWidth = 2;
     ctx.beginPath(); ctx.arc(sx, sy, rr, 0, Math.PI * 2); ctx.stroke();
-    ctx.strokeStyle = 'rgba(86,230,200,0.35)';
+    ctx.strokeStyle = 'rgba(127,224,196,0.35)';
     ctx.lineWidth = 1;
     ctx.beginPath(); ctx.arc(sx, sy, rr + 5 + pulse * 3, 0, Math.PI * 2); ctx.stroke();
   }
@@ -887,7 +887,7 @@ export class WorldRenderer {
         default: {
           const dur = 1.6;
           if (age > dur) { alive = false; break; }
-          const col = e.kind === 'spawn' ? '86,230,200' : e.kind === 'bless' ? '255,214,110' : e.kind === 'bloom' ? '120,230,110'
+          const col = e.kind === 'spawn' ? '127,224,196' : e.kind === 'bless' ? '255,214,110' : e.kind === 'bloom' ? '120,230,110'
             : e.kind === 'blight' ? '150,90,200' : e.kind === 'plague' ? '160,230,70' : '255,140,60';
           ctx.strokeStyle = `rgba(${col},${1 - age / dur})`;
           ctx.lineWidth = 2;
@@ -970,13 +970,13 @@ export class WorldRenderer {
       g.globalAlpha = 1;
     }
     const b = this.camera.bounds(0);
-    g.strokeStyle = 'rgba(86,230,200,0.95)';
+    g.strokeStyle = 'rgba(127,224,196,0.95)';
     g.lineWidth = 1.5;
     g.strokeRect(b.x0 * sx, b.y0 * sy, (b.x1 - b.x0) * sx, (b.y1 - b.y0) * sy);
     if (this.selectedId !== null) {
       const d = this.disp.get(this.selectedId);
       if (d) {
-        g.fillStyle = '#56e6c8';
+        g.fillStyle = '#7fe0c4';
         g.beginPath(); g.arc(d.x * sx, d.y * sy, 3, 0, Math.PI * 2); g.fill();
       }
     }

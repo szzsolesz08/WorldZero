@@ -1,0 +1,192 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-16T00:00:00Z",
+  "title": "Design System: WORLD ZERO",
+  "extensions": {
+    "colorMeta": {
+      "ocean-night": { "role": "neutral", "displayName": "Ocean Night", "canonical": "#070b12", "tonalRamp": ["#04060b", "#070b12", "#0c1420", "#18243a", "#2e3e55", "#55687e", "#8a9cad", "#c4d0db"] },
+      "panel-glass": { "role": "neutral", "displayName": "Floating Panel", "canonical": "rgba(9, 14, 22, 0.9)" },
+      "panel-solid": { "role": "neutral", "displayName": "Solid Panel", "canonical": "#0a1019" },
+      "surface-1": { "role": "neutral", "displayName": "Surface 1 (rest)", "canonical": "#0c1420" },
+      "surface-2": { "role": "neutral", "displayName": "Surface 2 (hover)", "canonical": "#121c2b" },
+      "surface-3": { "role": "neutral", "displayName": "Surface 3 (pressed)", "canonical": "#18243a" },
+      "rule": { "role": "neutral", "displayName": "Hairline Rule", "canonical": "rgba(148, 178, 204, 0.12)" },
+      "rule-strong": { "role": "neutral", "displayName": "Strong Rule", "canonical": "rgba(148, 178, 204, 0.22)" },
+      "grid": { "role": "neutral", "displayName": "Chart Grid", "canonical": "rgba(148, 178, 204, 0.09)" },
+      "text-1": { "role": "neutral", "displayName": "Moonlit Text", "canonical": "#e6eef4" },
+      "text-2": { "role": "neutral", "displayName": "Slate Text", "canonical": "#a9b8c6" },
+      "text-3": { "role": "neutral", "displayName": "Muted Slate", "canonical": "#7d90a3" },
+      "biolume-aqua": { "role": "primary", "displayName": "Biolume Aqua", "canonical": "#7fe0c4", "tonalRamp": ["#04130e", "#0c3a2f", "#16624f", "#2a8f75", "#4fbea0", "#7fe0c4", "#b0eedc", "#e0faf2"] },
+      "biolume-aqua-soft": { "role": "primary", "displayName": "Aqua Wash", "canonical": "rgba(127, 224, 196, 0.14)" },
+      "biolume-aqua-hover": { "role": "primary", "displayName": "Aqua Hover", "canonical": "#9aead3" },
+      "aqua-ink": { "role": "primary", "displayName": "Aqua Ink", "canonical": "#04130e" },
+      "ember-amber": { "role": "secondary", "displayName": "Ember Amber", "canonical": "#f0b35a", "tonalRamp": ["#2a1a05", "#553610", "#82541b", "#b07a2c", "#d79a43", "#f0b35a", "#f7d197", "#fcefd8"] },
+      "ember-amber-soft": { "role": "secondary", "displayName": "Amber Wash", "canonical": "rgba(240, 179, 90, 0.14)" },
+      "danger": { "role": "tertiary", "displayName": "Signal Red", "canonical": "#ef6b5f", "tonalRamp": ["#2b0b08", "#5a1a14", "#8a2b22", "#bb4337", "#ef6b5f", "#f59389", "#ffb3ab", "#ffe3df"] },
+      "danger-soft": { "role": "tertiary", "displayName": "Red Wash", "canonical": "rgba(239, 107, 95, 0.14)" },
+      "danger-text": { "role": "tertiary", "displayName": "Pale Red Text", "canonical": "#ffb3ab" },
+      "good": { "role": "tertiary", "displayName": "Growth Green", "canonical": "#4cc38a", "tonalRamp": ["#06231a", "#0f4632", "#196a4a", "#278f63", "#4cc38a", "#7cd6aa", "#b2e8cc", "#e3f7ec"] },
+      "series-1": { "role": "data", "displayName": "Series Blue", "canonical": "#3987e5" },
+      "series-2": { "role": "data", "displayName": "Series Orange", "canonical": "#d95926" },
+      "series-3": { "role": "data", "displayName": "Series Teal-Green", "canonical": "#199e70" },
+      "map-void": { "role": "neutral", "displayName": "Map Void", "canonical": "#04060b" }
+    },
+    "typographyMeta": {
+      "wordmark": { "displayName": "Wordmark", "purpose": "WORLD ZERO in the top bar (16px) and loading card (22px). Chakra Petch only." },
+      "lead-figure": { "displayName": "Lead Figure", "purpose": "The one headline number of a dashboard section." },
+      "headline": { "displayName": "Headline", "purpose": "Dialog titles." },
+      "title": { "displayName": "Title", "purpose": "Inspected creature name; overview fact values." },
+      "section": { "displayName": "Section", "purpose": "Section and flyout headings; chart titles at 12.5px." },
+      "body": { "displayName": "Body", "purpose": "Default UI text with cv11 and ss01." },
+      "control": { "displayName": "Control", "purpose": "Buttons, tabs, transport." },
+      "label": { "displayName": "Label", "purpose": "Captions, units, terms, chips, legends, tooltips." },
+      "axis": { "displayName": "Axis", "purpose": "Chart tick labels, tabular, Text 3." },
+      "map-label": { "displayName": "Map Label", "purpose": "Spaced uppercase landmass names and settlement tags drawn on the canvas." },
+      "seed": { "displayName": "Seed", "purpose": "World seeds only." }
+    },
+    "shadows": [
+      { "name": "float", "value": "0 12px 32px -12px rgba(0,0,0,0.65), 0 2px 6px rgba(0,0,0,0.35)", "purpose": "Every panel floating over the map, tooltips, the mobile actions menu." },
+      { "name": "sheet", "value": "0 30px 80px -20px rgba(0,0,0,0.8)", "purpose": "Modal dialogs only, over a rgba(2,4,8,0.66) backdrop with 3px blur." },
+      { "name": "focus-halo", "value": "0 0 0 3px rgba(127,224,196,0.15)", "purpose": "Text input focus, paired with an aqua border." },
+      { "name": "panel-blur", "value": "backdrop-filter: blur(10px) saturate(1.1)", "purpose": "Material of floating panels over the live map; never on dialogs or tooltips." }
+    ],
+    "motion": [
+      { "name": "ease", "value": "cubic-bezier(0.16, 1, 0.3, 1)", "purpose": "The single easing curve for all UI state transitions." },
+      { "name": "state-fast", "value": "120ms", "purpose": "Tooltip fade." },
+      { "name": "state", "value": "150-160ms", "purpose": "Hover and pressed colour changes on buttons, rail, tabs, layers." },
+      { "name": "panel", "value": "200-260ms", "purpose": "Dashboard slide/fade, inspector slide-in (12px, 220ms), toast." },
+      { "name": "ticker-in", "value": "320ms", "purpose": "New ticker event rises 8px and fades in." },
+      { "name": "data", "value": "400ms", "purpose": "Meter width and segment-bar flex changes." },
+      { "name": "camera-fly", "value": "exponential ease-out, k = 1 - exp(-6 dt)", "purpose": "Camera fly-to on events, Locate, and minimap clicks; follow mode keeps the selected creature centred." },
+      { "name": "reduced-motion", "value": "1ms", "purpose": "All animations and transitions collapse under prefers-reduced-motion." }
+    ],
+    "breakpoints": [
+      { "name": "wide", "value": "1280px", "purpose": "Below: dashboard 340px, top-bar stats and world subtitle hidden." },
+      { "name": "clock", "value": "1100px", "purpose": "Below: clock subline hidden." },
+      { "name": "narrow", "value": "1000px", "purpose": "Below: ticker hidden, inspector 300px." },
+      { "name": "short", "value": "860px (height)", "purpose": "Below: minimap hidden." },
+      { "name": "mobile", "value": "720px", "purpose": "48px top bar, speed-cycle transport, overflow actions menu, rail toggle, dashboard as 50vh bottom sheet, full-width inspector and flyouts, no minimap or ticker." }
+    ]
+  },
+  "components": [
+    {
+      "name": "Button",
+      "kind": "button",
+      "refersTo": "button",
+      "description": "Default instrument key: Surface 1 fill, strong hairline border.",
+      "html": "<button class=\"ds-btn\"><svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"12\" cy=\"12\" r=\"7\"/><line x1=\"12\" y1=\"2\" x2=\"12\" y2=\"5\"/><line x1=\"12\" y1=\"19\" x2=\"12\" y2=\"22\"/><line x1=\"2\" y1=\"12\" x2=\"5\" y2=\"12\"/><line x1=\"19\" y1=\"12\" x2=\"22\" y2=\"12\"/></svg>Locate</button>",
+      "css": ".ds-btn { height: 30px; padding: 0 11px; display: inline-flex; align-items: center; gap: 7px; border-radius: 6px; border: 1px solid var(--rule-strong, rgba(148,178,204,0.22)); background: var(--surface-1, #0c1420); color: var(--text-1, #e6eef4); font: 500 12.5px 'Inter Variable', Inter, system-ui, sans-serif; cursor: pointer; transition: background 160ms cubic-bezier(0.16,1,0.3,1), border-color 160ms cubic-bezier(0.16,1,0.3,1); } .ds-btn:hover { background: var(--surface-2, #121c2b); border-color: rgba(148,178,204,0.32); } .ds-btn:active { transform: translateY(0.5px); } .ds-btn:focus-visible { outline: 2px solid var(--accent, #7fe0c4); outline-offset: 2px; }"
+    },
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The one primary action per view, in Biolume Aqua.",
+      "html": "<button class=\"ds-btn-primary\">New world</button>",
+      "css": ".ds-btn-primary { height: 30px; padding: 0 11px; display: inline-flex; align-items: center; gap: 7px; border-radius: 6px; border: 1px solid #7fe0c4; background: #7fe0c4; color: #04130e; font: 600 12.5px 'Inter Variable', Inter, system-ui, sans-serif; cursor: pointer; transition: background 160ms cubic-bezier(0.16,1,0.3,1); } .ds-btn-primary:hover { background: #9aead3; } .ds-btn-primary:focus-visible { outline: 2px solid #7fe0c4; outline-offset: 2px; }"
+    },
+    {
+      "name": "Speed Transport",
+      "kind": "nav",
+      "refersTo": "transport-button",
+      "description": "Segmented well for pause and simulation speed; pressed speed takes the aqua wash.",
+      "html": "<div class=\"ds-transport\"><button>||</button><button aria-pressed=\"true\">1x</button><button>2x</button><button>10x</button><span class=\"ds-tps\">30 t/s</span></div>",
+      "css": ".ds-transport { display: inline-flex; align-items: center; gap: 2px; padding: 3px; background: #0c1420; border: 1px solid rgba(148,178,204,0.12); border-radius: 8px; font-family: 'Inter Variable', Inter, sans-serif; } .ds-transport button { height: 28px; min-width: 34px; padding: 0 9px; border: 0; border-radius: 6px; background: transparent; color: #a9b8c6; font-weight: 600; font-size: 12px; cursor: pointer; transition: background 160ms cubic-bezier(0.16,1,0.3,1), color 160ms cubic-bezier(0.16,1,0.3,1); } .ds-transport button:hover { background: #121c2b; color: #e6eef4; } .ds-transport button[aria-pressed='true'] { background: rgba(127,224,196,0.14); color: #7fe0c4; } .ds-transport button:focus-visible { outline: 2px solid #7fe0c4; outline-offset: 2px; } .ds-tps { color: #7d90a3; font-size: 11px; padding: 0 8px 0 6px; font-variant-numeric: tabular-nums; }"
+    },
+    {
+      "name": "Dashboard Tabs",
+      "kind": "nav",
+      "refersTo": "tab",
+      "description": "Equal-width tabs; selected tab gets a 2px aqua underline.",
+      "html": "<div class=\"ds-tabs\"><button class=\"ds-tab\" aria-selected=\"true\">World</button><button class=\"ds-tab\">Evolution</button><button class=\"ds-tab\">Civs</button><button class=\"ds-tab\">Climate</button></div>",
+      "css": ".ds-tabs { display: flex; gap: 2px; padding: 6px 6px 0; border-bottom: 1px solid rgba(148,178,204,0.12); background: #0a1019; } .ds-tab { flex: 1; height: 34px; border: 0; background: transparent; color: #7d90a3; font: 600 12px 'Inter Variable', Inter, sans-serif; border-radius: 7px 7px 0 0; position: relative; cursor: pointer; transition: color 150ms cubic-bezier(0.16,1,0.3,1), background 150ms cubic-bezier(0.16,1,0.3,1); } .ds-tab:hover { color: #e6eef4; background: #0c1420; } .ds-tab[aria-selected='true'] { color: #e6eef4; } .ds-tab[aria-selected='true']::after { content: ''; position: absolute; left: 10px; right: 10px; bottom: -1px; height: 2px; background: #7fe0c4; border-radius: 2px; } .ds-tab:focus-visible { outline: 2px solid #7fe0c4; outline-offset: -2px; }"
+    },
+    {
+      "name": "Rail Button",
+      "kind": "nav",
+      "refersTo": "rail-button",
+      "description": "God-tool rail key; active tool takes the aqua wash and a left-edge bar.",
+      "html": "<div class=\"ds-rail\"><button class=\"ds-rail-btn\" aria-pressed=\"true\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M4 4l7 16 2-7 7-2z\"/></svg></button><button class=\"ds-rail-btn\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M13 2L3 14h9l-1 8 10-12h-9z\"/></svg></button></div>",
+      "css": ".ds-rail { display: inline-flex; flex-direction: column; gap: 2px; padding: 6px; background: rgba(9,14,22,0.9); border: 1px solid rgba(148,178,204,0.12); border-radius: 10px; } .ds-rail-btn { width: 38px; height: 31px; display: grid; place-items: center; border-radius: 7px; border: 0; background: transparent; color: #a9b8c6; cursor: pointer; position: relative; transition: background 150ms cubic-bezier(0.16,1,0.3,1), color 150ms cubic-bezier(0.16,1,0.3,1); } .ds-rail-btn:hover { background: #121c2b; color: #e6eef4; } .ds-rail-btn[aria-pressed='true'] { background: rgba(127,224,196,0.14); color: #7fe0c4; } .ds-rail-btn[aria-pressed='true']::before { content: ''; position: absolute; left: -6px; top: 8px; bottom: 8px; width: 2px; border-radius: 2px; background: #7fe0c4; } .ds-rail-btn:focus-visible { outline: 2px solid #7fe0c4; outline-offset: 2px; }"
+    },
+    {
+      "name": "Chips",
+      "kind": "chip",
+      "refersTo": "chip",
+      "description": "Pill tags for relations, technologies and titles.",
+      "html": "<div class=\"ds-chips\"><span class=\"ds-chip\">Fire</span><span class=\"ds-chip ds-chip-now\">Farming</span><span class=\"ds-chip ds-chip-war\">At war</span></div>",
+      "css": ".ds-chips { display: flex; gap: 4px; flex-wrap: wrap; } .ds-chip { display: inline-flex; align-items: center; height: 21px; padding: 0 8px; border-radius: 11px; font: 500 11px 'Inter Variable', Inter, sans-serif; background: #121c2b; color: #a9b8c6; border: 1px solid rgba(148,178,204,0.12); } .ds-chip-now { background: transparent; border-color: rgba(240,179,90,0.55); color: #f0b35a; } .ds-chip-war { background: rgba(239,107,95,0.14); color: #ffb3ab; border-color: rgba(239,107,95,0.35); }"
+    },
+    {
+      "name": "Text Input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Seed and name fields; aqua border with soft halo on focus.",
+      "html": "<input class=\"ds-input\" value=\"drift-cinder-1522\" />",
+      "css": ".ds-input { height: 32px; padding: 0 10px; border-radius: 6px; border: 1px solid rgba(148,178,204,0.22); background: #0c1420; color: #e6eef4; font: 400 12px 'JetBrains Mono', ui-monospace, monospace; } .ds-input:focus { outline: none; border-color: #7fe0c4; box-shadow: 0 0 0 3px rgba(127,224,196,0.15); }"
+    },
+    {
+      "name": "Trait Bar",
+      "kind": "custom",
+      "refersTo": "trait",
+      "description": "Label, capsule track filled in the entity hue, species-mean tick, tabular value.",
+      "html": "<div class=\"ds-trait\"><span class=\"ds-t-label\">Speed</span><span class=\"ds-t-track\"><span class=\"ds-t-fill\" style=\"width:62%;background:hsl(140,70%,60%)\"></span><span class=\"ds-t-mark\" style=\"left:55%\"></span></span><span class=\"ds-t-val\">0.62</span></div>",
+      "css": ".ds-trait { display: grid; grid-template-columns: 96px 1fr 34px; gap: 8px; align-items: center; width: 300px; font: 400 11.5px 'Inter Variable', Inter, sans-serif; } .ds-t-label { color: #a9b8c6; } .ds-t-track { position: relative; height: 6px; background: #121c2b; border-radius: 6px; } .ds-t-fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 6px; opacity: 0.85; } .ds-t-mark { position: absolute; top: -3px; width: 2px; height: 12px; background: #e6eef4; border-radius: 1px; opacity: 0.75; } .ds-t-val { text-align: right; color: #a9b8c6; font-variant-numeric: tabular-nums; }"
+    },
+    {
+      "name": "Event Row",
+      "kind": "custom",
+      "refersTo": "event-row",
+      "description": "Chronicle entry with a category-tinted icon tile; click flies the camera to it.",
+      "html": "<button class=\"ds-ev\"><span class=\"ds-ev-icon\"><svg width=\"13\" height=\"13\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M3 22h18\"/><path d=\"M6 18V11\"/><path d=\"M10 18V11\"/><path d=\"M14 18V11\"/><path d=\"M18 18V11\"/><path d=\"M12 2l8 5H4z\"/></svg></span><span><b>Dravhaven founded</b><small>Year 9</small><p>The Oro tribe settles the eastern shore.</p></span></button>",
+      "css": ".ds-ev { display: grid; grid-template-columns: 22px 1fr; gap: 9px; padding: 8px 6px; border-radius: 7px; border: 0; background: transparent; color: #e6eef4; text-align: left; cursor: pointer; width: 320px; font-family: 'Inter Variable', Inter, sans-serif; } .ds-ev:hover { background: #0c1420; } .ds-ev:focus-visible { outline: 2px solid #7fe0c4; outline-offset: 2px; } .ds-ev-icon { width: 22px; height: 22px; border-radius: 6px; display: grid; place-items: center; background: rgba(240,179,90,0.14); color: #f0b35a; } .ds-ev b { font-size: 12px; font-weight: 600; } .ds-ev small { color: #7d90a3; font-size: 11px; margin-left: 6px; font-weight: 500; } .ds-ev p { margin: 1px 0 0; font-size: 12px; color: #a9b8c6; }"
+    },
+    {
+      "name": "Floating Panel",
+      "kind": "card",
+      "refersTo": "panel",
+      "description": "Instrument panel material for anything over the live map.",
+      "html": "<div class=\"ds-panel\"><h2>Population</h2><dl><dt>Species alive</dt><dd>3 of 4 ever</dd><dt>Average lifespan</dt><dd>21.7 days</dd></dl></div>",
+      "css": ".ds-panel { width: 300px; padding: 14px; background: rgba(9,14,22,0.9); border: 1px solid rgba(148,178,204,0.12); border-radius: 10px; box-shadow: 0 12px 32px -12px rgba(0,0,0,0.65), 0 2px 6px rgba(0,0,0,0.35); backdrop-filter: blur(10px) saturate(1.1); color: #e6eef4; font: 400 13px/1.45 'Inter Variable', Inter, sans-serif; } .ds-panel h2 { margin: 0 0 10px; font-size: 13px; font-weight: 600; } .ds-panel dl { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; font-size: 12px; margin: 0; } .ds-panel dt { color: #7d90a3; } .ds-panel dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Night Observatory",
+    "overview": "WORLD ZERO is a single screen: a full-bleed painted planet with a ring of quiet instruments around it. The map is the only thing allowed to be bright. Panels are dark, nearly opaque ocean-night slabs with hairline cool rules; they blur what moves beneath them only because they float over a living map. Everything that is not the world steps back: secondary text sits at a cool slate, numbers are tabular so they can tick without jitter, and colour in the chrome is spent sparingly so the species and tribe hues on the map can carry meaning.\n\nDensity is that of a scientific instrument, not a dashboard of tiles. Information arrives as compact lists, key/value columns, small multiples of line charts and trait bars, with 13px Inter as the working voice. One live accent, a pale biolume aqua, marks what you have selected, what has focus, and the one primary action; warm amber marks events and warnings; red and green are reserved for status. The system refuses the neon sci-fi HUD: no glowing borders on every box, no stat tiles for their own sake.\n\nMotion is state, not spectacle: 150 to 250ms transitions on the shared out-expo curve, a camera that eases out when it flies to an event, and no page-load choreography.",
+    "keyCharacteristics": [
+      "Full-bleed canvas map with floating instrument panels around it",
+      "Ocean-night neutrals in three surface steps plus a translucent floating panel",
+      "One accent (biolume aqua) reserved for selection, focus, and primary",
+      "Amber for events and warnings; species and tribe hues are data, never decoration",
+      "Inter with tabular numerals everywhere; Chakra Petch only on the wordmark and map labels",
+      "Hairline cool rules instead of boxes and glows"
+    ],
+    "rules": [
+      { "name": "The One Light Rule", "body": "Biolume aqua appears only on selection, focus, and the single primary action. If it marks anything else, it is wrong.", "section": "colors" },
+      { "name": "The Data Owns Hue Rule", "body": "Species and tribe colours come from the simulation and are reused verbatim everywhere that entity appears. Chrome never borrows them, and they never stand in for status.", "section": "colors" },
+      { "name": "The Three Series Rule", "body": "Charts use series-1, series-2, series-3 by meaning, not by order, and never introduce a fourth chrome series colour; multi-species charts use species hues instead.", "section": "colors" },
+      { "name": "The Tabular Rule", "body": "Every number that can change is set in tabular numerals, so live counts never shift the layout.", "section": "typography" },
+      { "name": "The Cartographer's Face Rule", "body": "Chakra Petch is for the wordmark and for names drawn on the map, nothing else. Headings, buttons, and numbers stay in Inter.", "section": "typography" },
+      { "name": "The Blur Over Motion Rule", "body": "Backdrop blur (10px, saturate 1.1) is applied only to panels floating over the live map. Dialogs and tooltips are solid.", "section": "elevation" },
+      { "name": "The No Glow Rule", "body": "Borders are hairline rules in cool slate. Nothing in the chrome glows; glows belong to the map (fires, settlement lights at night, torches).", "section": "elevation" }
+    ],
+    "dos": [
+      "Do reserve Biolume Aqua (#7fe0c4) for selection, focus, and the one primary action per view.",
+      "Do set every changing number in tabular numerals.",
+      "Do carry a species or tribe colour unchanged from the map into every list, swatch, bar, label and chart where that entity appears.",
+      "Do assign chart colours by meaning from the three series tokens, with direct labels on the latest value and a table toggle.",
+      "Do blur panels only when they float over the live map; use the solid panel for dialogs, tooltips and menus.",
+      "Do separate sections with a hairline rule and spacing, not with nested cards.",
+      "Do keep state transitions between 150 and 260ms on cubic-bezier(0.16, 1, 0.3, 1) and let the camera ease out on fly-to.",
+      "Do collapse to the bottom sheet, rail toggle and overflow menu at 720px and below."
+    ],
+    "donts": [
+      "Don't add glowing borders, neon outlines or coloured box shadows to chrome; glow belongs to the map.",
+      "Don't build stat tiles for their own sake; numbers live in fact grids, key/value lists and lead figures.",
+      "Don't use Chakra Petch for headings, buttons or numbers.",
+      "Don't use species or tribe hues as status colours, or status colours as data.",
+      "Don't add page-load choreography or animate anything that is not a state change.",
+      "Don't introduce a second accent; amber is for events and warnings, not emphasis."
+    ]
+  }
+}
