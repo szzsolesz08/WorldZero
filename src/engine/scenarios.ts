@@ -145,7 +145,7 @@ export const SCENARIOS: ScenarioConfig[] = [
     description: 'One ancestral population is placed on every island of an archipelago. Separated by the sea, each lineage evolves on its own.',
     world: { islands: 6, landFraction: 0.3, temperatureBias: 6 },
     species: [{ template: 'grazer', count: 34, herds: 1 }, { template: 'scavenger', count: 14, herds: 1 }],
-    settings: { ...BASE_SETTINGS, mutationRate: 0.11, disasterRate: 0.3 },
+    settings: { ...BASE_SETTINGS, mutationRate: 0.15, disasterRate: 0.3 },
     perIsland: true,
   },
   {
