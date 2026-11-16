@@ -497,6 +497,17 @@ export class WorldRenderer {
       }
       ctx.globalAlpha = 1;
     }
+    // At night, a faint additive life signal keeps populations legible at overview zoom.
+    if (dark > 0.3 && z < 4.5) {
+      ctx.globalAlpha = Math.min(0.55, (dark - 0.3) * 0.9);
+      const q = Math.max(1.4, z * 0.32);
+      for (const d of this.disp.values()) {
+        if (d.x < b.x0 || d.x > b.x1 || d.y < b.y0 || d.y > b.y1) continue;
+        ctx.fillStyle = hueColor(d.hue, d.sat, 70);
+        ctx.fillRect(d.x * z + ox - q / 2, d.y * z + oy - q / 2, q, q);
+      }
+      ctx.globalAlpha = 1;
+    }
     this.drawFx(toS, now, dt);
     if (this.flash > 0.01) {
       ctx.fillStyle = `rgba(200,220,255,${this.flash * 0.6})`;
@@ -632,6 +643,11 @@ export class WorldRenderer {
         ctx.moveTo(sx - cx, sy - cy);
         ctx.lineTo(sx + cx * 0.6, sy + cy * 0.6);
         ctx.stroke();
+        // Brighter head so each streak reads as an animal moving, not texture.
+        ctx.fillStyle = hueColor(d.hue, d.sat, 80);
+        ctx.globalAlpha = resting ? 0.7 : 1;
+        const hr = Math.max(1, s * 0.34);
+        ctx.fillRect(sx + cx * 0.6 - hr, sy + cy * 0.6 - hr, hr * 2, hr * 2);
         continue;
       }
       ctx.globalAlpha = 1;
