@@ -119,7 +119,7 @@ export function Inspector() {
       <div className="insp-body">
         <div className={`goal${c.alive ? '' : ' dead'}`}>
           {(!c.alive || (ACTION_LABEL[c.action] ?? c.action) !== c.goal) && (
-            <small>{c.alive ? `${ACTION_LABEL[c.action] ?? c.action}${c.job ? ` · ${c.job}` : ''}` : `Died ${c.deathTick !== null ? fmtDate(c.deathTick) : ''}`}</small>
+            <small>{c.alive ? `${ACTION_LABEL[c.action] ?? c.action}${c.job && c.action === 'work' ? ` · ${c.job}` : ''}` : `Died ${c.deathTick !== null ? fmtDate(c.deathTick) : ''}`}</small>
           )}
           {c.alive ? c.goal : `Cause: ${c.causeOfDeath}`}
         </div>
