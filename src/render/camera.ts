@@ -19,14 +19,24 @@ export class Camera {
     this.worldH = h;
   }
 
+  /** Screen space covered by the top bar / bottom sheet, so framing uses the visible area. */
+  insetTop = 0;
+  insetBottom = 0;
+
+  private visibleH(): number {
+    return Math.max(80, this.viewH - this.insetTop - this.insetBottom);
+  }
+
   fitZoom(): number {
-    return Math.min(this.viewW / this.worldW, this.viewH / this.worldH);
+    return Math.min(this.viewW / this.worldW, this.visibleH() / this.worldH);
   }
 
   fit(): void {
+    const visH = this.visibleH();
+    // On narrow screens fill the visible height (pan sideways) instead of showing a thin strip.
+    this.zoom = this.viewW < 720 ? (visH / this.worldH) * 0.96 : this.fitZoom() * 0.98;
     this.cx = this.worldW / 2;
-    this.cy = this.worldH / 2;
-    this.zoom = this.fitZoom() * 0.98;
+    this.cy = this.worldH / 2 + (this.viewH / 2 - (this.insetTop + visH / 2)) / this.zoom;
     this.minZoom = this.fitZoom() * 0.6;
     this.targetCx = this.targetCy = this.targetZoom = null;
   }

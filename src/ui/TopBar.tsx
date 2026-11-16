@@ -1,5 +1,5 @@
-import { Pause, Play, Globe2, Save, FolderOpen, Download, Upload, PanelRightClose, PanelRightOpen } from 'lucide-react';
-import { useRef } from 'react';
+import { Pause, Play, Globe2, Save, FolderOpen, Download, Upload, PanelRightClose, PanelRightOpen, MoreHorizontal } from 'lucide-react';
+import { useRef, useState } from 'react';
 import { useUI, SPEEDS } from '../client/store';
 import { applySpeed, getClient, autosaveNow } from './client';
 import { SEASON_NAMES } from '../engine/constants';
@@ -44,6 +44,7 @@ export function TopBar() {
   const set = useUI((s) => s.set);
   const notify = useUI((s) => s.notify);
   const fileRef = useRef<HTMLInputElement>(null);
+  const [more, setMore] = useState(false);
 
   const setSpeed = (sp: (typeof SPEEDS)[number]) => {
     set({ speed: sp, paused: false });
@@ -102,8 +103,10 @@ export function TopBar() {
           {paused ? <Play size={14} /> : <Pause size={14} />}
         </button>
         {SPEEDS.map((sp, i) => (
-          <button key={sp} onClick={() => setSpeed(sp)} aria-pressed={!paused && speed === sp} title={`${sp}× speed (${i + 1})`}>{sp}×</button>
+          <button key={sp} className="sp" onClick={() => setSpeed(sp)} aria-pressed={!paused && speed === sp} title={`${sp}× speed (${i + 1})`}>{sp}×</button>
         ))}
+        <button className="speed-cycle" onClick={() => setSpeed(SPEEDS[(SPEEDS.indexOf(speed) + 1) % SPEEDS.length])}
+          aria-label={`Speed ${speed}×, tap for faster`} title="Cycle speed">{speed}×</button>
         <span className="tps num" title={`Simulated ticks per second (actual) · ${msPerTick.toFixed(2)} ms per tick`}>{paused ? 'paused' : `${Math.round(tps)} t/s`}</span>
       </div>
       <div className="spacer" />
@@ -118,10 +121,13 @@ export function TopBar() {
       <button className="btn primary" onClick={() => set({ scenarioDialog: true })} title="Generate a new world or choose a scenario (N)">
         <Globe2 size={14} /> <span className="btn-label">New world</span>
       </button>
-      <button className="btn icon" onClick={quickSave} title="Save world" aria-label="Save world"><Save size={14} /></button>
-      <button className="btn icon" onClick={quickLoad} title="Load saved world" aria-label="Load saved world"><FolderOpen size={14} /></button>
-      <button className="btn icon" onClick={doExport} title="Export world to a file" aria-label="Export world to a file"><Download size={14} /></button>
-      <button className="btn icon" onClick={() => fileRef.current?.click()} title="Import world from a file" aria-label="Import world from a file"><Upload size={14} /></button>
+      <button className="btn icon more-toggle" onClick={() => setMore(!more)} aria-expanded={more} aria-label="World actions" title="World actions"><MoreHorizontal size={16} /></button>
+      <div className={`world-actions${more ? ' open' : ''}`} onClick={() => setMore(false)}>
+        <button className="btn icon" onClick={quickSave} title="Save world" aria-label="Save world"><Save size={14} /><span className="act-label">Save world</span></button>
+        <button className="btn icon" onClick={quickLoad} title="Load saved world" aria-label="Load saved world"><FolderOpen size={14} /><span className="act-label">Load saved world</span></button>
+        <button className="btn icon" onClick={doExport} title="Export world to a file" aria-label="Export world to a file"><Download size={14} /><span className="act-label">Export to file</span></button>
+        <button className="btn icon" onClick={() => fileRef.current?.click()} title="Import world from a file" aria-label="Import world from a file"><Upload size={14} /><span className="act-label">Import from file</span></button>
+      </div>
       <input ref={fileRef} type="file" accept="application/json,.json" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) void doImport(f); e.target.value = ''; }} />
       <button className="btn icon ghost" onClick={() => set({ panelOpen: !panelOpen })} aria-label={panelOpen ? 'Hide dashboard' : 'Show dashboard'} title="Toggle dashboard (Tab)">
         {panelOpen ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}

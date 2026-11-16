@@ -9,32 +9,66 @@ import { EventIcon } from './EventIcon';
 import { selectEvent } from './Dashboard';
 import { fmtDate } from './charts/common';
 import { TICKS_PER_DAY } from '../engine/constants';
+import { Rng } from '../engine/rng';
+import { generateWorld, DEFAULT_WORLDGEN, classifyBiomes } from '../engine/world/worldgen';
+import { BIOMES } from '../engine/world/biomes';
 
-/** Small generative banner per scenario: a band of terrain colours with a mood. */
-function ScenarioArt({ id }: { id: string }) {
-  const palettes: Record<string, string[]> = {
-    primordial: ['#123a5c', '#2f6d7a', '#6e9c58', '#3f7a46', '#9c8a62'],
-    eden: ['#1d4f6e', '#3f8f6c', '#79b85c', '#3d8a3f', '#b8c46a'],
-    survival: ['#5a4630', '#a07d4a', '#c9a66b', '#8a6a3c', '#d9bf8a'],
-    iceage: ['#2a3e58', '#8fa9c4', '#d5e3ef', '#eef4fa', '#9fb6cc'],
-    predators: ['#2a1418', '#6a2a2a', '#3f6a3c', '#8e3a2e', '#51402e'],
-    islands: ['#0e2c4c', '#1d5576', '#3e8e8a', '#d4c48a', '#1d5576'],
-    civilization: ['#1f3550', '#5f8a54', '#c9a95e', '#8e6d3e', '#d8c08a'],
-    apocalypse: ['#1a0d0d', '#5a1d14', '#c2461f', '#ef8a3a', '#3a2620'],
-  };
-  const p = palettes[id] ?? ['#1a2a3a', '#3a5a6a', '#6a8a7a', '#4a6a5a', '#8a9a8a'];
-  let h = 0;
-  for (const ch of id) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
-  const pts = Array.from({ length: 9 }, (_, i) => 30 + ((h >> (i * 3)) & 15) * 1.6 + Math.sin(i * 1.3 + h) * 6);
-  const path = `M0,74 ${pts.map((y, i) => `L${(i / 8) * 260},${y}`).join(' ')} L260,74 Z`;
+/** Thumbnail of the real planet this scenario + seed will generate (same seeded generator as the simulation). */
+const thumbCache = new Map<string, ImageData>();
+let thumbQueue: Promise<void> = Promise.resolve();
+
+function paintThumb(sc: ScenarioConfig, seed: string): ImageData {
+  const key = `${seed}|${JSON.stringify(sc.world)}|${sc.settings.tempOffset}`;
+  const hit = thumbCache.get(key);
+  if (hit) return hit;
+  const world = generateWorld({ ...DEFAULT_WORLDGEN, ...sc.world }, new Rng(seed).fork(1));
+  if (sc.settings.tempOffset !== 0) classifyBiomes(world, sc.settings.tempOffset);
+  const W = world.width, H = world.height;
+  const img = new ImageData(W, H);
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const i = y * W + x;
+      let [r, g, b] = BIOMES[world.biome[i]].color;
+      if (world.river[i] && world.biome[i] > 3) { r = 70; g = 135; b = 175; }
+      const e = world.elevation[i], el = world.elevation[Math.max(0, i - W - 1)];
+      const shade = world.biome[i] > 3 ? 1 + Math.max(-0.35, Math.min(0.35, (el - e) * 10)) : 1;
+      const o = i * 4;
+      img.data[o] = r * shade; img.data[o + 1] = g * shade; img.data[o + 2] = b * shade; img.data[o + 3] = 255;
+    }
+  }
+  thumbCache.set(key, img);
+  if (thumbCache.size > 40) thumbCache.delete(thumbCache.keys().next().value!);
+  return img;
+}
+
+function WorldThumb({ sc, seed }: { sc: ScenarioConfig; seed: string }) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    setReady(false);
+    const t = window.setTimeout(() => {
+      // Generate one card at a time so the dialog stays responsive.
+      thumbQueue = thumbQueue.then(() => new Promise<void>((resolve) => {
+        window.setTimeout(() => {
+          if (!cancelled && ref.current) {
+            const img = paintThumb(sc, seed);
+            const g = ref.current.getContext('2d')!;
+            ref.current.width = img.width;
+            ref.current.height = img.height;
+            g.putImageData(img, 0, 0);
+            setReady(true);
+          }
+          resolve();
+        }, 0);
+      }));
+    }, 350);
+    return () => { cancelled = true; window.clearTimeout(t); };
+  }, [sc, seed]);
   return (
-    <svg className="scenario-art" viewBox="0 0 260 74" preserveAspectRatio="none" aria-hidden="true">
-      <defs><linearGradient id={`sky-${id}`} x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor={p[0]} /><stop offset="1" stopColor={p[1]} /></linearGradient></defs>
-      <rect width="260" height="74" fill={`url(#sky-${id})`} />
-      <path d={path} fill={p[2]} opacity="0.9" />
-      <path d={`M0,74 ${pts.map((y, i) => `L${(i / 8) * 260 + 14},${y + 14}`).join(' ')} L260,74 Z`} fill={p[3]} />
-      <rect y="66" width="260" height="8" fill={p[4]} opacity="0.5" />
-    </svg>
+    <span className="scenario-art" aria-hidden="true">
+      <canvas ref={ref} style={{ opacity: ready ? 1 : 0 }} />
+    </span>
   );
 }
 
@@ -94,7 +128,7 @@ export function NewWorldDialog() {
         <div className="scenario-grid">
           {all.map((s) => (
             <button key={s.id} className="scenario" aria-pressed={pick === s.id} onClick={() => { setPick(s.id); if (s.seed) setSeed(s.seed); }} onDoubleClick={() => start(seed)}>
-              <ScenarioArt id={s.custom ? 'primordial' : s.id} />
+              <WorldThumb sc={s} seed={seed} />
               <span className="scenario-text">
                 <b>{s.name}</b>
                 <em>{s.tagline}</em>

@@ -35,7 +35,7 @@ export function Dashboard() {
     <aside className={`dash panel${open ? '' : ' closed'}`} aria-label="Dashboard">
       <div className="tabs" role="tablist">
         {TABS.map((t) => (
-          <button key={t.id} role="tab" className="tab" aria-selected={panel === t.id} onClick={() => set({ panel: t.id })}>
+          <button key={t.id} role="tab" className="tab" aria-selected={panel === t.id} onClick={() => set({ panel: t.id, panelOpen: true })}>
             {t.label}
           </button>
         ))}
@@ -70,30 +70,27 @@ function Overview() {
   const alive = species.filter((x) => x.extinctTick === null && x.population > 0).sort((a, b) => b.population - a.population);
   const total = Math.max(1, s.population);
   const perDay = (arr: number[]) => arr.map((v) => v * 2);
+  const change = pop.length > 3 ? `${delta >= 0 ? '+' : ''}${fmtNum(delta)} today` : undefined;
   return (
     <>
       <section className="section">
-        <div className="lead-figure">
-          <b>{fmtNum(s.population)}</b>
-          <span>living creatures{pop.length > 3 && <> · <span className={delta >= 0 ? 'delta-up' : 'delta-down'}>{delta >= 0 ? '+' : ''}{fmtNum(delta)}</span> today</>}</span>
-        </div>
-        <dl className="facts">
-          <div className="fact"><dt>Species alive</dt><dd className="num">{s.speciesAlive}<small>of {s.speciesTotal}</small></dd></div>
-          <div className="fact"><dt>Births / day</dt><dd className="num">{fmtNum(s.births * 2)}</dd></div>
-          <div className="fact"><dt>Deaths / day</dt><dd className="num">{fmtNum(s.deaths * 2)}</dd></div>
-          <div className="fact"><dt>Avg lifespan</dt><dd className="num">{s.avgLifespanDays.toFixed(1)}<small>days</small></dd></div>
-          <div className="fact"><dt>Biodiversity</dt><dd className="num">{s.biodiversity.toFixed(2)}<small>eff. sp.</small></dd></div>
-          <div className="fact"><dt>Intelligence</dt><dd className="num">{s.avgIntelligence.toFixed(2)}<small>mean</small></dd></div>
-          <div className="fact"><dt>Civilizations</dt><dd className="num">{s.tribes}<small>{s.settlements} towns</small></dd></div>
-          <div className="fact"><dt>Generations</dt><dd className="num">{s.maxGeneration}</dd></div>
-          <div className="fact"><dt>Infected</dt><dd className="num">{s.infected}</dd></div>
+        {h ? (
+          <LineChart title={`Population · ${fmtNum(s.population)} living`} aside={change} x={h.tick}
+            series={[{ key: 'pop', label: 'Population', color: 'var(--series-1)', values: h.population }]} />
+        ) : (
+          <div className="section-head"><h2>Population · {fmtNum(s.population)} living</h2></div>
+        )}
+        <dl className="kv" style={{ marginTop: 12 }}>
+          <dt>Species alive</dt><dd>{s.speciesAlive} of {s.speciesTotal} ever</dd>
+          <dt>Births · deaths per day</dt><dd>{fmtNum(s.births * 2)} · {fmtNum(s.deaths * 2)}</dd>
+          <dt>Average lifespan</dt><dd>{s.avgLifespanDays.toFixed(1)} days</dd>
+          <dt>Biodiversity</dt><dd>{s.biodiversity.toFixed(2)} effective species</dd>
+          <dt>Mean intelligence</dt><dd>{s.avgIntelligence.toFixed(2)}</dd>
+          <dt>Civilizations</dt><dd>{s.tribes} tribes · {s.settlements} settlements</dd>
+          <dt>Deepest generation</dt><dd>{s.maxGeneration}</dd>
+          {s.infected > 0 && <><dt>Infected with plague</dt><dd style={{ color: 'var(--danger)' }}>{s.infected}</dd></>}
         </dl>
       </section>
-      {h && (
-        <section className="section">
-          <LineChart title="Population" x={h.tick} series={[{ key: 'pop', label: 'Population', color: 'var(--series-1)', values: h.population }]} />
-        </section>
-      )}
       {h && (
         <section className="section">
           <LineChart title="Births and deaths" aside="per day" x={h.tick} area={false}

@@ -39,10 +39,17 @@ export function Minimap() {
     <div className="minimap panel">
       <canvas ref={ref} width={MM_W * 2} height={MM_H * 2} style={{ width: MM_W, height: MM_H }} onClick={jump} aria-label="Minimap — click to move the camera" />
       <div className="minimap-tools" role="group" aria-label="Map layers">
-        <button className="btn ghost sm" aria-pressed={overlays.territory} onClick={() => toggle('territory')} title="Territories" style={{ color: overlays.territory ? 'var(--accent)' : undefined }}><MapIcon size={13} />Borders</button>
-        <button className="btn ghost sm" aria-pressed={overlays.vegetation} onClick={() => toggle('vegetation')} title="Vegetation stress" style={{ color: overlays.vegetation ? 'var(--accent)' : undefined }}><Leaf size={13} />Flora</button>
-        <button className="btn ghost sm" aria-pressed={overlays.weather} onClick={() => toggle('weather')} title="Weather" style={{ color: overlays.weather ? 'var(--accent)' : undefined }}><CloudRain size={13} />Sky</button>
-        <button className="btn ghost sm" aria-pressed={overlays.labels} onClick={() => toggle('labels')} title="Labels" style={{ color: overlays.labels ? 'var(--accent)' : undefined }}><Tag size={13} />Names</button>
+        <span className="minimap-label">Layers</span>
+        {([
+          ['territory', 'Territory borders', MapIcon],
+          ['vegetation', 'Vegetation stress', Leaf],
+          ['weather', 'Weather', CloudRain],
+          ['labels', 'Place names', Tag],
+        ] as const).map(([k, label, Icon]) => (
+          <button key={k} className="layer-btn" aria-pressed={overlays[k]} onClick={() => toggle(k)} title={label} aria-label={label}>
+            <Icon size={14} />
+          </button>
+        ))}
       </div>
     </div>
   );
@@ -54,11 +61,20 @@ export function EventTicker() {
   const [shown, setShown] = useState<{ e: SimEvent; at: number }[]>([]);
   const lastId = useRef(0);
   useEffect(() => {
+    // A new or loaded world restarts event numbering: forget the old world's ticker.
+    const newest = events.length ? events[events.length - 1].id : 0;
+    if (newest < lastId.current) {
+      lastId.current = 0;
+      setShown([]);
+    }
     const fresh = events.filter((e) => e.id > lastId.current && (e.level >= 2 || e.cat === 'god'));
     if (events.length) lastId.current = Math.max(lastId.current, events[events.length - 1].id);
     if (fresh.length === 0) return;
     const now = performance.now();
-    setShown((s) => [...s, ...fresh.slice(-3).map((e) => ({ e, at: now }))].slice(-4));
+    setShown((s) => {
+      const add = fresh.slice(-3).filter((e) => !s.some((x) => x.e.id === e.id)).map((e) => ({ e, at: now }));
+      return [...s, ...add].slice(-4);
+    });
   }, [events]);
   useEffect(() => {
     const t = window.setInterval(() => {

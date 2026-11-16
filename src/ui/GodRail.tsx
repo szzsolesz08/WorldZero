@@ -39,14 +39,19 @@ export function GodRail() {
   const tool = useUI((s) => s.tool);
   const set = useUI((s) => s.set);
   const [powers, setPowers] = useState(false);
+  const [open, setOpen] = useState(false);
+  const active = GROUPS.flat().find((t) => t.id === tool) ?? GROUPS[0][0];
   return (
     <>
-      <nav className="rail panel" aria-label="God tools">
+      <nav className={`rail panel${open ? ' open' : ''}`} aria-label="God tools">
+        <button className="rail-btn rail-toggle" aria-expanded={open} aria-label={`Tools: ${active.label}`} onClick={() => setOpen(!open)}>
+          <active.icon size={17} strokeWidth={1.9} />
+        </button>
         {GROUPS.map((g, gi) => (
           <div className="rail-group" key={gi}>
             {g.map((t) => (
               <button key={t.id} className="rail-btn" aria-pressed={tool === t.id} aria-label={t.label}
-                onClick={() => { set({ tool: tool === t.id && t.id !== 'inspect' ? 'inspect' : t.id }); setPowers(false); }}>
+                onClick={() => { set({ tool: tool === t.id && t.id !== 'inspect' ? 'inspect' : t.id }); setPowers(false); setOpen(false); }}>
                 <t.icon size={17} strokeWidth={1.9} />
                 <span className="tip">{t.label}<small>{t.hint}</small></span>
               </button>
@@ -54,7 +59,7 @@ export function GodRail() {
           </div>
         ))}
         <div className="rail-group">
-          <button className="rail-btn" aria-pressed={powers} aria-label="World powers" onClick={() => setPowers(!powers)}>
+          <button className="rail-btn" aria-pressed={powers} aria-label="World powers" onClick={() => { setPowers(!powers); setOpen(false); }}>
             <Wand2 size={17} strokeWidth={1.9} />
             <span className="tip">World powers<small>Global events and new species</small></span>
           </button>

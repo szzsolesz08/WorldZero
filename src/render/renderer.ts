@@ -104,6 +104,9 @@ export class WorldRenderer {
     this.canvas.style.width = `${w}px`;
     this.canvas.style.height = `${h}px`;
     const first = this.camera.viewW === 800 && this.camera.viewH === 600;
+    const narrow = w <= 720;
+    this.camera.insetTop = narrow ? 48 : 52;
+    this.camera.insetBottom = narrow ? 52 : 0;
     this.camera.resize(w, h);
     if (first && this.terrain) this.camera.fit();
     const g = this.ctx.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.35, w / 2, h / 2, Math.max(w, h) * 0.75);
@@ -374,12 +377,17 @@ export class WorldRenderer {
     if (this.overlays.territory && this.terrHi.width) {
       ctx.drawImage(this.terrHi, 0, 0, tw, th);
       ctx.lineJoin = 'round';
+      // Borders recede at overview zoom and sharpen as you close in.
+      const rel = z / Math.max(0.1, cam.fitZoom());
+      const borderA = Math.min(0.9, Math.max(0.3, 0.3 + (rel - 1) * 0.4));
       for (const bd of this.borders) {
         ctx.strokeStyle = bd.color;
-        ctx.globalAlpha = 0.18;
-        ctx.lineWidth = 5 / z;
-        ctx.stroke(bd.path);
-        ctx.globalAlpha = 0.9;
+        if (rel >= 1.8) {
+          ctx.globalAlpha = 0.18;
+          ctx.lineWidth = 5 / z;
+          ctx.stroke(bd.path);
+        }
+        ctx.globalAlpha = borderA;
         ctx.lineWidth = 1.5 / z;
         ctx.stroke(bd.path);
       }
@@ -431,6 +439,8 @@ export class WorldRenderer {
     }
     this.drawSettlements(f.settlements, toS, b, now);
     this.drawCreatures(toS, b, now);
+    ctx.globalAlpha = 1;
+    ctx.lineCap = 'butt';
     this.drawSelection(toS, now, dt);
 
     // Fires (additive).
@@ -604,21 +614,27 @@ export class WorldRenderer {
   private drawCreatures(toS: (x: number, y: number) => [number, number], b: { x0: number; y0: number; x1: number; y1: number }, now: number): void {
     const ctx = this.ctx, z = this.camera.zoom, dpr = this.dpr;
     const detailed = z >= 4.5;
+    const [ox, oy] = toS(0, 0);
+    if (!detailed) ctx.lineCap = 'round';
     for (const [id, d] of this.disp) {
       if (d.x < b.x0 || d.x > b.x1 || d.y < b.y0 || d.y > b.y1) continue;
-      const sx = d.x * z + (toS(0, 0)[0]), sy = d.y * z + (toS(0, 0)[1]);
+      const sx = d.x * z + ox, sy = d.y * z + oy;
       const s = Math.max(2.2, d.size * z * (detailed ? 0.68 : 0.95));
       if (!detailed) {
-        ctx.fillStyle = hueColor(d.hue, d.sat, d.flags & FLAG.resting ? 45 : 62);
-        const q = Math.max(2, s * 0.8);
-        ctx.fillRect(sx - q / 2, sy - q / 2, q, q);
-        if (d.flags & FLAG.tribe && z > 2.4) {
-          ctx.strokeStyle = `hsla(${Math.round(d.tribeHue * 360)},80%,70%,0.9)`;
-          ctx.lineWidth = 1;
-          ctx.strokeRect(sx - q / 2 - 1, sy - q / 2 - 1, q + 2, q + 2);
-        }
+        // Overview: a short oriented streak, longer while moving, so herds read as flowing groups.
+        const resting = d.flags & FLAG.resting;
+        const len = resting ? 0.6 : Math.max(1.6, s * 0.9) + (d.flags & FLAG.fleeing ? 2 : 0);
+        const cx = Math.cos(d.h) * len, cy = Math.sin(d.h) * len;
+        ctx.strokeStyle = hueColor(d.hue, d.sat, resting ? 48 : 64);
+        ctx.globalAlpha = resting ? 0.6 : 0.85;
+        ctx.lineWidth = Math.max(1.4, s * 0.55);
+        ctx.beginPath();
+        ctx.moveTo(sx - cx, sy - cy);
+        ctx.lineTo(sx + cx * 0.6, sy + cy * 0.6);
+        ctx.stroke();
         continue;
       }
+      ctx.globalAlpha = 1;
       if (d.flags & FLAG.notable) {
         ctx.strokeStyle = 'rgba(255,214,110,0.9)';
         ctx.lineWidth = Math.max(1, z * 0.05);

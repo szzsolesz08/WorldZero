@@ -100,8 +100,7 @@ export function Inspector() {
       <div className="insp-head">
         <Portrait c={c} />
         <div className="insp-name">
-          {c.title && <span className="title">{c.title}</span>}
-          <h2>{c.name}</h2>
+          <h2>{c.name}{c.title && <span className="chip title-chip">{c.title}</span>}</h2>
           <p title={c.speciesName}>{c.speciesCommon} · <em>{c.speciesName}</em></p>
         </div>
         <button className="btn icon ghost" onClick={close} aria-label="Close inspector"><X size={16} /></button>
